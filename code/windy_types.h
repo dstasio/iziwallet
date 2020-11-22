@@ -38,33 +38,27 @@ union v2i
     struct { i32 x, y; };
     i32    row[2];
 };
-
 union v2
 {
     struct { r32 x, y; };
     r32    row[2];
 };
-
 union v3
 {
     struct { r32 x, y, z; };
     r32    row[3];
     v2     xy;
-
     operator bool()
     {
         return x||y||z;
     }
-
 };
-
 union v4
 {
     struct { r32 x, y, z, w; };
     struct { v3 xyz; r32 _w; };
     r32    row[4];
 };
-
 union m4
 {
     r32 m[4][4];

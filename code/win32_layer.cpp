@@ -8,15 +8,12 @@
 
 #include <windows.h>
 #include <d3d11.h>
-#include <dxgidebug.h>
-#include <dxgidebug.h>
 
-#include "windy.h"
+#include "windy.cpp"
 #include "windy_platform.h"
 
 #include "win32_layer.h"
 #include <stdio.h>
-//#include <d3d10.h>
 
 #if WINDY_INTERNAL
 #define output_string(s, ...)        {char Buffer[100];sprintf_s(Buffer, s, __VA_ARGS__);OutputDebugStringA(Buffer);}
@@ -37,8 +34,6 @@
 #define mouse_down(id, key)    
 #define mouse_up(id, key)      
 #define file_time_to_u64(wt) ((wt).dwLowDateTime | ((u64)((wt).dwHighDateTime) << 32))
-
-// @todo, @critical: Use VirtualProtect (handmade_hero day 004) to check for freed-memory access errors
 
 global b32 global_running;
 global b32 global_error;
@@ -94,80 +89,6 @@ PLATFORM_READ_FILE(win32_read_file)
     }
 
     return(Result);
-}
-
-// NOTE(dave): This requires char arrays of length 'MAX_PATH'
-internal void
-GetWindyPaths(char *OriginalPath, char *TempPath)
-{
-    u32 PathLength = GetModuleFileNameA(0, OriginalPath, MAX_PATH);
-
-    char *c = OriginalPath + PathLength;
-    while(*c != '\\') {c--; PathLength--;}
-
-    char *DLLName = "windy.dll";
-
-    while(*DLLName != '\0')
-    {
-        *(++c) = *(DLLName++);
-        PathLength++;
-    }
-    OriginalPath[++PathLength] = '\0';
-
-    for(u32 i = 0;
-        i <= PathLength;
-        ++i)
-    {
-        TempPath[i] = OriginalPath[i];
-    }
-    TempPath[PathLength] = '0';
-    TempPath[PathLength+1] = '\0';
-}
-
-internal Win32_Game_Code
-load_windy()
-{
-    char orig_path[MAX_PATH];
-    char temp_path[MAX_PATH];
-    GetWindyPaths(orig_path, temp_path);
-    while(!CopyFile(orig_path, temp_path, false)) {}
-
-    Win32_Game_Code game_code = {};
-    game_code.dll = LoadLibraryA("windy.dll0");
-    if(game_code.dll)
-    {
-        game_code.game_update_and_render = (Game_Update_And_Render *)GetProcAddress(game_code.dll, "WindyUpdateAndRender");
-    }
-    else
-    {
-        throw_error_and_exit("Could not load 'windy.dll0'\n");
-    }
-
-    return(game_code);
-}
-
-internal void
-UnloadWindy(Win32_Game_Code *game_code)
-{
-    game_code->game_update_and_render = 0;
-    FreeLibrary(game_code->dll);
-}
-
-internal void
-reload_windy(Win32_Game_Code *game_code)
-{
-    char orig_path[MAX_PATH];
-    char temp_path[MAX_PATH];
-    GetWindyPaths(orig_path, temp_path);
-    u64 current_write_time = win32_get_last_write_time(orig_path);
-
-    if(current_write_time != game_code->write_time)
-    {
-        UnloadWindy(game_code);
-
-        *game_code = load_windy();
-        game_code->write_time = current_write_time;
-    }
 }
 
 internal 
@@ -238,6 +159,8 @@ LRESULT CALLBACK WindyProc(
         // @todo: implement this
         case WM_SETCURSOR:
         {
+            HCURSOR arrow = LoadCursor(0, IDC_ARROW);
+            SetCursor(arrow);
         } break;
 
         default:
@@ -286,19 +209,11 @@ WinMain(
 
     if(MainWindow)
     {
-        ShowCursor(false);
+        ShowCursor(1);
         RECT window_rect = {};
         GetWindowRect(MainWindow, &window_rect);
         u32 window_width  = window_rect.right - window_rect.left;
         u32 window_height = window_rect.bottom - window_rect.top;
-
-        //
-        // raw input set-up
-        //
-        RAWINPUTDEVICE raw_in_devices[] = {
-            {0x01, 0x02, 0, MainWindow}
-        };
-        RegisterRawInputDevices(raw_in_devices, 1, sizeof(raw_in_devices[0]));
 
 #if WINDY_INTERNAL
         LPVOID BaseAddress = (LPVOID)Terabytes(2);
@@ -311,29 +226,13 @@ WinMain(
         GameMemory.storage_size = Megabytes(500);
         GameMemory.storage = VirtualAlloc(BaseAddress, GameMemory.storage_size,
                                            MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
-        GameMemory.read_file = win32_read_file;
-        GameMemory.reload_if_changed = win32_reload_file_if_changed;
-
-        Win32_Game_Code windy = load_windy();
 
         // @todo: probably a global variable is a good idea?
         Platform_Renderer renderer = {};
         D11_Renderer d11 = {};
         renderer.load_renderer    = win32_load_d3d11;
-        renderer.reload_shader    = d3d11_reload_shader;
-        renderer.init_texture     = d3d11_init_texture;
-        renderer.load_wexp        = d3d11_load_wexp;
-        renderer.init_square_mesh = d3d11_init_square_mesh; // @todo: this is to be removed; called in a general init function for the renderer
         renderer.clear               = d3d11_clear;
-        renderer.set_active_mesh     = d3d11_set_active_mesh;
-        renderer.set_active_texture  = d3d11_set_active_texture;
-        renderer.set_active_shader   = d3d11_set_active_shader;
         renderer.set_render_targets  = d3d11_set_default_render_targets;
-        renderer.set_depth_stencil   = d3d11_set_depth_stencil;
-        renderer.draw_rect = d3d11_draw_rect;
-        renderer.draw_text = d3d11_draw_text;
-        renderer.draw_mesh = d3d11_draw_mesh;
-        renderer.draw_line = d3d11_draw_line;
         renderer.platform = (void *)&d11;
         global_renderer = &renderer;
 
@@ -370,6 +269,8 @@ WinMain(
             &d11.context
         );
 
+        renderer.load_renderer(&renderer);
+
         Input input = {};
         MSG Message = {};
         u32 Count = 0;
@@ -377,7 +278,6 @@ WinMain(
         i64 last_performance_counter = 0;
         i64 current_performance_counter = 0;
         Assert(QueryPerformanceCounter((LARGE_INTEGER *)&last_performance_counter));
-        Gamemode gamemode = GAMEMODE_GAME;
         while(global_running && !global_error)
         {
             input.pressed = {};
@@ -436,43 +336,12 @@ WinMain(
                             key_up(VK_MENU,    alt);
                         } break;
 
-#define WINDY_WIN32_MOUSE_SENSITIVITY 1000.f
-                        case WM_INPUT:
-                        {
-                            RAWINPUT raw_input = {};
-                            u32 raw_size = sizeof(raw_input);
-                            GetRawInputData((HRAWINPUT)Message.lParam, RID_INPUT, &raw_input, &raw_size, sizeof(RAWINPUTHEADER));
-                            RAWMOUSE raw_mouse = raw_input.data.mouse;
-                            if ((raw_mouse.usFlags & MOUSE_MOVE_RELATIVE) == MOUSE_MOVE_RELATIVE)
-                            {
-                                input.mouse.dx = ((r32)raw_mouse.lLastX / 65535.f)*WINDY_WIN32_MOUSE_SENSITIVITY;
-                                input.mouse.dy = ((r32)raw_mouse.lLastY / 65535.f)*WINDY_WIN32_MOUSE_SENSITIVITY;
-                            }
-
-                            raw_mouse_button(1, mouse_left);
-                            raw_mouse_button(2, mouse_right);
-                            raw_mouse_button(3, mouse_middle);
-
-                            if (raw_mouse.usButtonFlags & RI_MOUSE_WHEEL)
-                            {
-                                input.mouse.wheel = raw_mouse.usButtonData;
-                            }
-
-                            if (gamemode == GAMEMODE_GAME)
-                            {
-                                SetCursorPos((window_rect.right - window_rect.left)/2, (window_rect.bottom - window_rect.top)/2);
-                            }
-                        } break;
-
                         case WM_MOUSEMOVE:
                         {
-                            if (gamemode == GAMEMODE_EDITOR)
-                            {
-                                // @todo: doing the division here might cause problems if a window resize
-                                //        happens between frames.
-                                input.mouse.x = (r32)(((i16*)&Message.lParam)[0]) / global_width;
-                                input.mouse.y = (r32)(((i16*)&Message.lParam)[1]) / global_height;
-                            }
+                            // @todo: doing the division here might cause problems if a window resize
+                            //        happens between frames.
+                            input.mouse.x = (r32)(((i16*)&Message.lParam)[0]) / global_width;
+                            input.mouse.y = (r32)(((i16*)&Message.lParam)[1]) / global_height;
                         } break;
 
                         default:
@@ -481,39 +350,16 @@ WinMain(
                             DispatchMessage(&Message);
                         } break;
                     }
-                    if (input.pressed.esc)
-                    {
-                        if (gamemode == GAMEMODE_GAME)
-                        {
-                            gamemode = GAMEMODE_EDITOR;
-                            ShowCursor(true);
-                        }
-                        else if (gamemode == GAMEMODE_EDITOR)
-                        {
-                            gamemode = GAMEMODE_GAME;
-                            ShowCursor(false);
-                        }
-                    }
                 }
                 Assert(QueryPerformanceCounter((LARGE_INTEGER *)&current_performance_counter));
                 dtime = (r32)(current_performance_counter - last_performance_counter) / (r32)performance_counter_frequency;
             }
 
-#if WINDY_INTERNAL
-            reload_windy(&windy);
-#endif
+            renderer.set_render_targets();
+            renderer.clear({0.06f, 0.1f, 0.15f});
+            game_update_and_render(&GameMemory);
 
-            if(windy.game_update_and_render)
-            {
-                windy.game_update_and_render(&input, dtime, &renderer, &GameMemory, &gamemode, global_width, global_height);
-            }
-            else
-            {
-                Assert(0);
-                // @todo: report error
-            }
             last_performance_counter = current_performance_counter;
-
             d11.swap_chain->Present(0, 0);
         }
     }
