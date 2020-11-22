@@ -9,7 +9,7 @@
 #include <windows.h>
 #include <d3d11.h>
 
-#include "windy.cpp"
+#include "windy.h"
 #include "windy_platform.h"
 
 #include "win32_layer.h"
@@ -52,6 +52,7 @@ global b32 global_error;
 global u32 global_width = 1280;
 global u32 global_height = 720;
 global Platform_Renderer *global_renderer;
+global Memory_Pool global_memory = {};
 
 inline u64
 win32_get_last_write_time(char *Path)
@@ -253,9 +254,9 @@ void credit_count(Saldo *saldo)
 
 struct Linked_Transaction
 {
-    i32 date;
+    u32 date;
     r32 value;
-    r32 promised;
+    b32 promised;
     char comment[64];
     void *next;
 };
@@ -263,62 +264,47 @@ struct Linked_Transaction
 struct Transactor
 {
     char name[64];
+    u32 last_date;
+    r32 total_value;
+    r32 total_promised;
     Linked_Transaction *transactions;
 };
 
 global Transactor global_transactors[50];
-gobal u32 n_transactors;
+global u32 n_transactors;
 
 int store_transaction(void *input, int n_cols, char **cols, char **col_names)
 {
-    int col_index = 0;
-    char *c = *cols;
-
-    i32 t_index = -1;
-    while (col_index < n_cols)
+    Transactor *transactor = 0;
+    for (u32 t_index = 0; t_index < n_transactors; ++t_index)
     {
-        switch (col_index)
+        if(!strcmp(cols[COL_client], global_transactors[t_index].name))
         {
-            case COL_client:
-            {
-//                for (; t_index < (i32)n_transactors; ++t_index)
-//                {
-//                    if(!strcmp(c, global_transactors[t_index].name))
-//                    {
-
-//                    }
-//                }
-                if (ImGui::Selectable(c, false, ImGuiSelectableFlags_SpanAllColumns)) {}
-                ImGui::NextColumn();
-            } break;
-            case COL_value: break;
-            case COL_promise:
-            {
-                b32 promise = 0;
-                sscanf_s(c, "%d", &promise);
-                if (promise)
-                {
-                    ImGui::Text("-");  ImGui::NextColumn();
-                    ImGui::Text(cols[col_index - 1]);  ImGui::NextColumn();
-                }
-                else
-                {
-                    ImGui::Text(cols[col_index - 1]);  ImGui::NextColumn();
-                    ImGui::Text("-");  ImGui::NextColumn();
-                }
-            } break;
-            default:
-            {
-                ImGui::Text(c);
-                ImGui::NextColumn();
-            } break;
+            transactor = &global_transactors[t_index];
+            break;
         }
-        c = cols[++col_index];
     }
-    ImGui::Separator();
+    if (!transactor)
+    {
+        transactor = &global_transactors[n_transactors++];
+        strcpy(transactor->name, cols[COL_client]);
+    }
+
+    Linked_Transaction **tsaction = &transactor->transactions;
+    while (*tsaction) {tsaction = (Linked_Transaction **)&(*tsaction)->next;}
+    *tsaction = push_struct(Linked_Transaction);
+
+    sscanf_s(cols[COL_date],    "%u", &(*tsaction)->date);
+    sscanf_s(cols[COL_value],   "%f", &(*tsaction)->value);
+    sscanf_s(cols[COL_promise], "%d", &(*tsaction)->promised);
+    strcpy((*tsaction)->comment, cols[COL_comment]);
+
+    if ((*tsaction)->promised)                      transactor->total_promised += (*tsaction)->value;
+    else                                            transactor->total_value += (*tsaction)->value;
+    if ((*tsaction)->date > transactor->last_date)  transactor->last_date = (*tsaction)->date;
+
     return 0;
 }
-
 
 int
 WinMain(
@@ -370,10 +356,9 @@ WinMain(
 #endif
         global_running = true;
         global_error = false;
-        game_memory GameMemory = {};
-        GameMemory.storage_size = Megabytes(500);
-        GameMemory.storage = VirtualAlloc(BaseAddress, GameMemory.storage_size,
-                                           MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
+        global_memory.size = Megabytes(500);
+        global_memory.base = (u8 *)VirtualAlloc(BaseAddress, global_memory.size,
+                                                MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE);
 
         // @todo: probably a global variable is a good idea?
         Platform_Renderer renderer = {};
@@ -452,6 +437,8 @@ WinMain(
         sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Ezechiele', 123412341257,   'viene dalla bibbia', -10,    0, 'Paypal 2');", 0, 0, &dberr);
         Assert(!dberr);
 
+        sqlite3_exec(global_db, "SELECT * FROM movimenti;", store_transaction, 0, &dberr);
+        Assert(!dberr);
 
         Input input = {};
         MSG Message = {};
@@ -556,8 +543,7 @@ WinMain(
             char text_buffer[500] = {};
 
             renderer.set_render_targets();
-            renderer.clear({0.06f, 0.1f, 0.15f});
-            game_update_and_render(&GameMemory);
+            renderer.clear({0.06f, 0.3f, 0.45f});
 
             ImGui::Begin("IziWallet", 0, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar);
             ImGui::SetWindowSize(ImVec2((r32)global_width, (r32)global_height));
@@ -586,15 +572,28 @@ WinMain(
             ImGui::Text("Movimenti");
             ImGui::Columns(6, "movimenti");
             ImGui::Separator();
-            ImGui::Text("Cliente");  ImGui::NextColumn();
-            ImGui::Text("Data");  ImGui::NextColumn();
-            ImGui::Text("Dettagli");  ImGui::NextColumn();
-            ImGui::Text("Entrata/Usicta");  ImGui::NextColumn();
-            ImGui::Text("Attivita/Passivita");  ImGui::NextColumn();
-            ImGui::Text("Tasca");  ImGui::NextColumn();
+            ImGui::TextColored(ImVec4(0.f, 0.5f, 0.7f, 1.f), "Cliente");  ImGui::NextColumn();
+            ImGui::TextColored(ImVec4(0.f, 0.5f, 0.7f, 1.f), "Data");  ImGui::NextColumn();
+            ImGui::TextColored(ImVec4(0.f, 0.5f, 0.7f, 1.f), "Dettagli");  ImGui::NextColumn();
+            ImGui::TextColored(ImVec4(0.f, 0.5f, 0.7f, 1.f), "Entrata/Usicta");  ImGui::NextColumn();
+            ImGui::TextColored(ImVec4(0.f, 0.5f, 0.7f, 1.f), "Attivita/Passivita");  ImGui::NextColumn();
+            ImGui::TextColored(ImVec4(0.f, 0.5f, 0.7f, 1.f), "Tasca");  ImGui::NextColumn();
             ImGui::Separator();
-            sqlite3_exec(global_db, "SELECT * FROM movimenti;", display_transaction, 0, &dberr);
-            Assert(!dberr);
+
+            for (u32 trans_index = 0; trans_index < n_transactors; ++trans_index)
+            {
+                Transactor *tsactor = &global_transactors[trans_index];
+                ImGui::Text(tsactor->name);                                  ImGui::NextColumn();
+                sprintf_s(text_buffer, "%u", tsactor->last_date);
+                ImGui::Text(text_buffer);                                    ImGui::NextColumn();
+                ImGui::Text("");  ImGui::NextColumn();
+                sprintf_s(text_buffer, "% .2f", tsactor->total_value);
+                ImGui::Text(text_buffer);                                    ImGui::NextColumn();
+                sprintf_s(text_buffer, "% .2f", tsactor->total_promised);
+                ImGui::Text(text_buffer);                                    ImGui::NextColumn();
+                ImGui::Text("TODO");                                         ImGui::NextColumn();
+                ImGui::Separator();
+            }
 
             ImGui::End();
 

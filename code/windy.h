@@ -28,8 +28,8 @@ struct Memory_Pool
     u8 *base;
 };
 
-#define push_struct(pool, type) (type *)push_size_((pool), sizeof(type))
-#define push_array(pool, length, type) (type *)push_size_((pool), (length)*sizeof(type))
+#define push_struct(type) (type *)push_size_((&global_memory), sizeof(type))
+#define push_array(length, type) (type *)push_size_((&global_memory), (length)*sizeof(type))
 inline void *
 push_size_(Memory_Pool *pool, memory_index size)
 {
