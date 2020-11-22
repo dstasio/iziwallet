@@ -1,0 +1,16 @@
+Header:
+  Element              Size  Offset
+  ====================================================================
+  ID                   2     0x00   = ASCII for 'wx'
+  vertex_data offset   2     0x02   = Header Size
+  index_data  offset   4     0x04
+  end         offset   4     0x08
+  ====================================================================
+  vertex_data          4*8*N 0x0c
+  index_data           2*N   0x??
+
+
+
+
+Legend:
+  N = number of elements for resource (n. of vertices, n. of indices, etc.)

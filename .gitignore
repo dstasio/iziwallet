@@ -1,0 +1,6 @@
+*.swp
+*.blend[1-9]
+build/*
+*.*sh  
+backup/*
+config/session.vim
