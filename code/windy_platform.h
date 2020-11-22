@@ -53,58 +53,6 @@ struct Platform_Renderer
     void *platform;
 };
 
-struct Input_Keyboard
-{
-    u32 up;
-    u32 down;
-    u32 left;
-    u32 right;
-
-    u32 w;
-    u32 a;
-    u32 s;
-    u32 d;
-
-    u32 f;
-    u32 g;
-    u32 x;
-    u32 y;
-    u32 z;
-
-    u32 space;
-    u32 shift;
-    u32 ctrl;
-    u32 alt;
-    u32 esc;
-
-    u32 mouse_middle;
-    u32 mouse_left;
-    u32 mouse_right;
-};
-
-// @note: position is normalized: (0;0) top-left, (1,1)bottom-right
-//        delta goes from (-WINDY_WIN32_MOUSE_SENSITIVITY;-WINDY_WIN32_MOUSE_SENSITIVITY) to (+WINDY_WIN32_MOUSE_SENSITIVITY;+WINDY_WIN32_MOUSE_SENSITIVITY)
-struct Input_Mouse
-{
-    union {
-        struct { r32 x; r32 y; };
-        v2 p;
-    };
-    union {
-        struct { r32 dx; r32 dy; };
-        v2 dp;
-    };
-    i16 wheel;
-};
-
-struct Input
-{
-    Input_Keyboard pressed;
-    Input_Keyboard held;
-
-    Input_Mouse mouse;
-};
-
 typedef struct Game_Memory
 {
     b32 is_initialized;

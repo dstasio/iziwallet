@@ -53,6 +53,7 @@ global u32 global_width = 1280;
 global u32 global_height = 720;
 global Platform_Renderer *global_renderer;
 global Memory_Pool global_memory = {};
+global ImGuiIO *io;
 
 inline u64
 win32_get_last_write_time(char *Path)
@@ -138,52 +139,6 @@ PLATFORM_RELOAD_CHANGED_FILE(win32_reload_file_if_changed)
     return(has_changed);
 }
 
-#include "win32_renderer_d3d11.cpp"
-
-LRESULT CALLBACK WindyProc(
-    HWND   WindowHandle,
-    UINT   Message,
-    WPARAM w,
-    LPARAM l
-)
-{
-    LRESULT Result = 0;
-    switch(Message)
-    {
-        case WM_CLOSE:
-        {
-            DestroyWindow(WindowHandle);
-        } break;
-            
-        case WM_DESTROY:
-        {
-            global_running = false;
-            PostQuitMessage(0);
-        } break;
-
-        case WM_SIZE:
-        {
-            global_width = LOWORD(l);
-            global_height = HIWORD(l);
-
-            if (global_renderer)  d3d11_resize_render_targets();
-        } break;
-
-        // @todo: implement this
-        case WM_SETCURSOR:
-        {
-            HCURSOR arrow = LoadCursor(0, IDC_ARROW);
-            SetCursor(arrow);
-        } break;
-
-        default:
-        {
-          Result = DefWindowProcA(WindowHandle, Message, w, l);
-        } break;
-    }
-    return(Result);
-}
-
 struct Saldo
 {
     r32 effective;
@@ -258,6 +213,7 @@ struct Linked_Transaction
     r32 value;
     b32 promised;
     char comment[64];
+    char wallet[32];
     void *next;
 };
 
@@ -298,12 +254,94 @@ int store_transaction(void *input, int n_cols, char **cols, char **col_names)
     sscanf_s(cols[COL_value],   "%f", &(*tsaction)->value);
     sscanf_s(cols[COL_promise], "%d", &(*tsaction)->promised);
     strcpy((*tsaction)->comment, cols[COL_comment]);
+    strcpy((*tsaction)->wallet,  cols[COL_wallet]);
 
     if ((*tsaction)->promised)                      transactor->total_promised += (*tsaction)->value;
     else                                            transactor->total_value += (*tsaction)->value;
     if ((*tsaction)->date > transactor->last_date)  transactor->last_date = (*tsaction)->date;
 
     return 0;
+}
+
+#include "win32_renderer_d3d11.cpp"
+
+LRESULT CALLBACK WindyProc(
+    HWND   WindowHandle,
+    UINT   Message,
+    WPARAM w,
+    LPARAM l
+)
+{
+    LRESULT Result = 0;
+    switch(Message)
+    {
+        case WM_LBUTTONDOWN: { io->MouseDown[0] = 1; } break;
+        case WM_LBUTTONUP:   { io->MouseDown[0] = 0; } break;
+        case WM_RBUTTONDOWN: { io->MouseDown[1] = 1; } break;
+        case WM_RBUTTONUP:   { io->MouseDown[1] = 0; } break;
+        case WM_MBUTTONDOWN: { io->MouseDown[2] = 1; } break;
+        case WM_MBUTTONUP:   { io->MouseDown[2] = 0; } break;
+        case WM_MOUSEWHEEL: 
+        {
+            io->MouseWheel = (r32)GET_WHEEL_DELTA_WPARAM(w);
+        } break;
+
+        case WM_KEYDOWN:
+        {
+            if (w < 256)
+            {
+                if (io)  io->KeysDown[w] = 1;
+            }
+        } break;
+
+        case WM_KEYUP:
+        {
+            if (w < 256)
+            {
+                if (io)  io->KeysDown[w] = 0;
+            }
+        } break;
+
+        case WM_CLOSE:
+        {
+            DestroyWindow(WindowHandle);
+        } break;
+
+        case WM_DESTROY:
+        {
+            global_running = false;
+            PostQuitMessage(0);
+        } break;
+
+        case WM_SIZE:
+        {
+            global_width = LOWORD(l);
+            global_height = HIWORD(l);
+
+            if (global_renderer)  d3d11_resize_render_targets();
+        } break;
+
+        // @todo: implement this
+        case WM_SETCURSOR:
+        {
+            HCURSOR arrow = LoadCursor(0, IDC_ARROW);
+            SetCursor(arrow);
+        } break;
+
+        case WM_CHAR:
+        {
+            if (w > 0 && w < 0x10000 && io)
+            {
+                io->AddInputCharacterUTF16((unsigned short)w);
+            }
+        } break;
+
+        default:
+        {
+            Result = DefWindowProcA(WindowHandle, Message, w, l);
+        } break;
+    }
+    return(Result);
 }
 
 int
@@ -405,7 +443,7 @@ WinMain(
         renderer.load_renderer(&renderer);
 
         ImGui::CreateContext();
-        ImGuiIO& io = ImGui::GetIO();
+        io = &ImGui::GetIO();
         ImGui_ImplWin32_Init(main_window);
         ImGui_ImplDX11_Init(d11.device, d11.context);
 
@@ -440,7 +478,6 @@ WinMain(
         sqlite3_exec(global_db, "SELECT * FROM movimenti;", store_transaction, 0, &dberr);
         Assert(!dberr);
 
-        Input input = {};
         MSG Message = {};
         u32 Count = 0;
 
@@ -449,87 +486,22 @@ WinMain(
         Assert(QueryPerformanceCounter((LARGE_INTEGER *)&last_performance_counter));
         while(global_running && !global_error)
         {
-            input.pressed = {};
-            input.mouse.dp = {};
-            input.mouse.wheel = 0;
-
             Assert(QueryPerformanceCounter((LARGE_INTEGER *)&current_performance_counter));
             r32 dtime = (r32)(current_performance_counter - last_performance_counter) / (r32)performance_counter_frequency;
             while(dtime <= target_ms_per_frame)
             {
                 while(PeekMessageA(&Message, main_window, 0, 0, PM_REMOVE))
                 {
-                    switch(Message.message)
-                    {
-                        case WM_KEYDOWN:
-                        {
-                            key_down(VK_UP,      up);
-                            key_down(VK_DOWN,    down);
-                            key_down(VK_LEFT,    left);
-                            key_down(VK_RIGHT,   right);
-                            key_down(VK_W,       w);
-                            key_down(VK_A,       a);
-                            key_down(VK_S,       s);
-                            key_down(VK_D,       d);
-                            key_down(VK_F,       f);
-                            key_down(VK_G,       g);
-                            key_down(VK_X,       x);
-                            key_down(VK_Y,       y);
-                            key_down(VK_Z,       z);
-                            key_down(VK_SPACE,   space);
-                            key_down(VK_SHIFT,   shift);
-                            key_down(VK_CONTROL, ctrl);
-                            key_down(VK_ESCAPE,  esc);
-                            key_down(VK_MENU,    alt);
-                        } break;
+//                        case WM_MOUSEMOVE:
+//                        {
+//                            // @todo: doing the division here might cause problems if a window resize
+//                            //        happens between frames.
+//                            input.mouse.x = (r32)(((i16*)&Message.lParam)[0]) / global_width;
+//                            input.mouse.y = (r32)(((i16*)&Message.lParam)[1]) / global_height;
+//                        } break;
 
-                        case WM_KEYUP:
-                        {
-                            key_up(VK_UP,      up);
-                            key_up(VK_DOWN,    down);
-                            key_up(VK_LEFT,    left);
-                            key_up(VK_RIGHT,   right);
-                            key_up(VK_W,       w);
-                            key_up(VK_A,       a);
-                            key_up(VK_S,       s);
-                            key_up(VK_D,       d);
-                            key_up(VK_F,       f);
-                            key_up(VK_G,       g);
-                            key_up(VK_X,       x);
-                            key_up(VK_Y,       y);
-                            key_up(VK_Z,       z);
-                            key_up(VK_SPACE,   space);
-                            key_up(VK_SHIFT,   shift);
-                            key_up(VK_CONTROL, ctrl);
-                            key_up(VK_ESCAPE,  esc);
-                            key_up(VK_MENU,    alt);
-                        } break;
-
-                        case WM_MOUSEMOVE:
-                        {
-                            // @todo: doing the division here might cause problems if a window resize
-                            //        happens between frames.
-                            input.mouse.x = (r32)(((i16*)&Message.lParam)[0]) / global_width;
-                            input.mouse.y = (r32)(((i16*)&Message.lParam)[1]) / global_height;
-                        } break;
-
-                        case WM_LBUTTONDOWN: { mouse_down(mouse_left);   } break;
-                        case WM_LBUTTONUP:   { mouse_up  (mouse_left);   } break;
-                        case WM_RBUTTONDOWN: { mouse_down(mouse_right);  } break;
-                        case WM_RBUTTONUP:   { mouse_up  (mouse_right);  } break;
-                        case WM_MBUTTONDOWN: { mouse_down(mouse_middle); } break;
-                        case WM_MBUTTONUP:  { mouse_up  (mouse_middle); } break;
-                        case WM_MOUSEWHEEL: 
-                        {
-                            input.mouse.wheel = GET_WHEEL_DELTA_WPARAM(Message.wParam);
-                        } break;
-
-                        default:
-                        {
-                            TranslateMessage(&Message);
-                            DispatchMessage(&Message);
-                        } break;
-                    }
+                    TranslateMessage(&Message);
+                    DispatchMessage(&Message);
                 }
                 Assert(QueryPerformanceCounter((LARGE_INTEGER *)&current_performance_counter));
                 dtime = (r32)(current_performance_counter - last_performance_counter) / (r32)performance_counter_frequency;
@@ -538,8 +510,6 @@ WinMain(
             ImGui_ImplDX11_NewFrame();
             ImGui_ImplWin32_NewFrame();
             ImGui::NewFrame();
-            io.MouseDown[0] = input.held.mouse_left;
-            io.MouseWheel = (r32)input.mouse.wheel;
             char text_buffer[500] = {};
 
             renderer.set_render_targets();
@@ -572,28 +542,71 @@ WinMain(
             ImGui::Text("Movimenti");
             ImGui::Columns(6, "movimenti");
             ImGui::Separator();
-            ImGui::TextColored(ImVec4(0.f, 0.5f, 0.7f, 1.f), "Cliente");  ImGui::NextColumn();
-            ImGui::TextColored(ImVec4(0.f, 0.5f, 0.7f, 1.f), "Data");  ImGui::NextColumn();
-            ImGui::TextColored(ImVec4(0.f, 0.5f, 0.7f, 1.f), "Dettagli");  ImGui::NextColumn();
-            ImGui::TextColored(ImVec4(0.f, 0.5f, 0.7f, 1.f), "Entrata/Usicta");  ImGui::NextColumn();
-            ImGui::TextColored(ImVec4(0.f, 0.5f, 0.7f, 1.f), "Attivita/Passivita");  ImGui::NextColumn();
-            ImGui::TextColored(ImVec4(0.f, 0.5f, 0.7f, 1.f), "Tasca");  ImGui::NextColumn();
+            ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Cliente");  ImGui::NextColumn();
+            ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Data");  ImGui::NextColumn();
+            ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Dettagli");  ImGui::NextColumn();
+            ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Entrata/Usicta");  ImGui::NextColumn();
+            ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Attivita/Passivita");  ImGui::NextColumn();
+            ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Tasca");  ImGui::NextColumn();
             ImGui::Separator();
 
+            static b32 selections[50] = {};
             for (u32 trans_index = 0; trans_index < n_transactors; ++trans_index)
             {
+                b32 expand = 0;
                 Transactor *tsactor = &global_transactors[trans_index];
-                ImGui::Text(tsactor->name);                                  ImGui::NextColumn();
+                if (ImGui::Selectable(tsactor->name, false, ImGuiSelectableFlags_SpanAllColumns))
+                    selections[trans_index] = !selections[trans_index];
+                ImGui::NextColumn();
+
                 sprintf_s(text_buffer, "%u", tsactor->last_date);
                 ImGui::Text(text_buffer);                                    ImGui::NextColumn();
-                ImGui::Text("");  ImGui::NextColumn();
+
+                ImGui::Text("");                                             ImGui::NextColumn();
+                
                 sprintf_s(text_buffer, "% .2f", tsactor->total_value);
                 ImGui::Text(text_buffer);                                    ImGui::NextColumn();
+
                 sprintf_s(text_buffer, "% .2f", tsactor->total_promised);
                 ImGui::Text(text_buffer);                                    ImGui::NextColumn();
+                
                 ImGui::Text("TODO");                                         ImGui::NextColumn();
+
+                if (selections[trans_index])
+                {
+                    Linked_Transaction *tsaction = tsactor->transactions;
+                    while (tsaction)
+                    {
+                        ImGui::NextColumn();
+
+                        sprintf_s(text_buffer, "%u", tsactor->last_date);
+                        ImGui::Text(text_buffer);                                    ImGui::NextColumn();
+
+                        ImGui::Text(tsaction->comment);                              ImGui::NextColumn();
+
+                        sprintf_s(text_buffer, "% .2f", tsaction->value);
+                        if (tsaction->promised)
+                        {
+                            ImGui::NextColumn();
+                            ImGui::Text(text_buffer);                                ImGui::NextColumn();
+                        }
+                        else
+                        {
+                            ImGui::Text(text_buffer);                                ImGui::NextColumn();
+                            ImGui::NextColumn();
+                        }
+
+
+                        ImGui::Text(tsaction->wallet);                               ImGui::NextColumn();
+
+                        tsaction = (Linked_Transaction *)tsaction->next;
+                    }
+                }
                 ImGui::Separator();
             }
+
+            local_persist char buf_client[64] = {};
+            ImGui::InputText("", buf_client, 64);
 
             ImGui::End();
 
