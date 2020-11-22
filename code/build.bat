@@ -12,6 +12,10 @@ pushd ..\build
 
 REM 64-bit build
 del *.pdb > NUL 2> NUL
-cl %CommonCompilerFlags% ..\code\win32_layer.cpp -Fmwin32_windy.map -I..\imgui /link %CommonLinkerFlags% d3d11.lib
+REM cl %CommonCompilerFlags% /c ..\code\sqlite3.c
+REM lib sqlite3.obj
+cl %CommonCompilerFlags% ..\code\win32_layer.cpp -Fmwin32_windy.map -I..\imgui /link %CommonLinkerFlags% d3d11.lib sqlite3.lib
+
+IF NOT EXIST sqlite3.dll copy ..\libs\sqlite3.dll .\
 popd
 

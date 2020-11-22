@@ -21,6 +21,8 @@ d3d11_resize_render_targets()
     D11_Renderer *d11 = (D11_Renderer *)global_renderer->platform;
     if (d11->swap_chain && d11->context) {
         d11->context->OMSetRenderTargets(0, 0, 0);
+        if (d11->render_target_rgb)
+            d11->render_target_rgb->Release();
 
         d11->swap_chain->ResizeBuffers(0, 0, 0, DXGI_FORMAT_UNKNOWN, 0);
 

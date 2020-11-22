@@ -22,7 +22,9 @@
 #include "imgui_draw.cpp"
 //#include "imgui_internal.h"
 #include "imgui_widgets.cpp"
-#include "imgui_demo.cpp"
+//#include "imgui_demo.cpp"
+
+#include "sqlite3.h"
 
 #if WINDY_INTERNAL
 #define output_string(s, ...)        {char Buffer[100];sprintf_s(Buffer, s, __VA_ARGS__);OutputDebugStringA(Buffer);}
@@ -44,6 +46,7 @@
 #define mouse_up(key)      {{input.held.key = 0;input.pressed.key = 1;}}
 #define file_time_to_u64(wt) ((wt).dwLowDateTime | ((u64)((wt).dwHighDateTime) << 32))
 
+global sqlite3 *global_db;
 global b32 global_running;
 global b32 global_error;
 global u32 global_width = 1280;
@@ -180,6 +183,142 @@ LRESULT CALLBACK WindyProc(
     return(Result);
 }
 
+struct Saldo
+{
+    r32 effective;
+    r32 expected;
+    r32 credit;
+};
+
+#define COL_client   0
+#define COL_date     1
+#define COL_comment  2
+#define COL_value    3
+#define COL_promise  4
+#define COL_wallet   5
+int credit_count_step(void *input, int n_cols, char **cols, char **col_names)
+{
+    Saldo *saldo = (Saldo *)input;
+    char *c = *cols;
+    int col_index = 0;
+
+    r32 value = 0;
+    b32 promise = 0;
+    while (col_index < n_cols)
+    {
+        switch (col_index)
+        {
+            case COL_client:
+            {
+            } break;
+            case COL_date:
+            {
+            } break;
+            case COL_comment:
+            {
+            } break;
+            case COL_value:
+            {
+                sscanf_s(c, "%f", &value);
+            } break;
+            case COL_promise:
+            {
+                sscanf_s(c, "%d", &promise);
+            } break;
+            case COL_wallet:
+            {
+            } break;
+        }
+        c = cols[++col_index];
+    }
+
+    if (promise)
+    {
+        saldo->credit += value;
+    }
+    else
+    {
+        saldo->effective += value;
+    }
+    return 0;
+}
+
+void credit_count(Saldo *saldo)
+{
+    char *err = 0;
+    sqlite3_exec(global_db, "SELECT * FROM movimenti;", credit_count_step, (void *)saldo, &err);
+    Assert(!err);
+    saldo->expected = saldo->effective + saldo->credit;
+}
+
+struct Linked_Transaction
+{
+    i32 date;
+    r32 value;
+    r32 promised;
+    char comment[64];
+    void *next;
+};
+
+struct Transactor
+{
+    char name[64];
+    Linked_Transaction *transactions;
+};
+
+global Transactor global_transactors[50];
+gobal u32 n_transactors;
+
+int store_transaction(void *input, int n_cols, char **cols, char **col_names)
+{
+    int col_index = 0;
+    char *c = *cols;
+
+    i32 t_index = -1;
+    while (col_index < n_cols)
+    {
+        switch (col_index)
+        {
+            case COL_client:
+            {
+//                for (; t_index < (i32)n_transactors; ++t_index)
+//                {
+//                    if(!strcmp(c, global_transactors[t_index].name))
+//                    {
+
+//                    }
+//                }
+                if (ImGui::Selectable(c, false, ImGuiSelectableFlags_SpanAllColumns)) {}
+                ImGui::NextColumn();
+            } break;
+            case COL_value: break;
+            case COL_promise:
+            {
+                b32 promise = 0;
+                sscanf_s(c, "%d", &promise);
+                if (promise)
+                {
+                    ImGui::Text("-");  ImGui::NextColumn();
+                    ImGui::Text(cols[col_index - 1]);  ImGui::NextColumn();
+                }
+                else
+                {
+                    ImGui::Text(cols[col_index - 1]);  ImGui::NextColumn();
+                    ImGui::Text("-");  ImGui::NextColumn();
+                }
+            } break;
+            default:
+            {
+                ImGui::Text(c);
+                ImGui::NextColumn();
+            } break;
+        }
+        c = cols[++col_index];
+    }
+    ImGui::Separator();
+    return 0;
+}
+
 
 int
 WinMain(
@@ -285,6 +424,35 @@ WinMain(
         ImGui_ImplWin32_Init(main_window);
         ImGui_ImplDX11_Init(d11.device, d11.context);
 
+
+        // ===========================================================================================
+        // Sqlite3 
+        // ===========================================================================================
+        char *dberr = 0;
+        sqlite3_open("data.db", &global_db);
+        sqlite3_exec(global_db, "CREATE TABLE IF NOT EXISTS saldo(name TEXT PRIMARY KEY, comment TEXT, value REAL NOT NULL);", 0, 0, &dberr);
+        //sqlite3_exec(global_db, "INSERT OR IGNORE INTO saldo VALUES ('Entrate',   '', 0);", 0, 0, &dberr);
+        //sqlite3_exec(global_db, "INSERT OR IGNORE INTO saldo VALUES ('Usicte',    '', 0);", 0, 0, &dberr);
+        //sqlite3_exec(global_db, "INSERT OR IGNORE INTO saldo VALUES ('Attivita',  '', 0);", 0, 0, &dberr);
+        //sqlite3_exec(global_db, "INSERT OR IGNORE INTO saldo VALUES ('Passivita', '', 0);", 0, 0, &dberr);
+        sqlite3_exec(global_db, "INSERT OR IGNORE INTO saldo VALUES ('Paypal 1', 'Paypal di Giacomo', 0);", 0, 0, &dberr);
+        sqlite3_exec(global_db, "INSERT OR IGNORE INTO saldo VALUES ('Paypal 2', 'Paypal di Angelo', 0);", 0, 0, &dberr);
+        sqlite3_exec(global_db, "INSERT OR IGNORE INTO saldo VALUES ('Paypal 3', 'Paypal di Lello', 0);", 0, 0, &dberr);
+
+        sqlite3_exec(global_db, "CREATE TABLE IF NOT EXISTS\
+                     movimenti(cliente TEXT, data INT, commento TEXT, valore REAL NOT NULL, promessa BOOL, tasca TEXT, PRIMARY KEY (cliente, data), FOREIGN KEY(tasca) REFERENCES saldo(name));",
+                     0, 0, &dberr);
+        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Carmelo',   123412341234, 'mi ha chiamato bello',  17.35, 1, 'Paypal 1');", 0, 0, &dberr);
+        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Carmelo',   123412341235,                     '',  15,    0, 'Paypal 1');", 0, 0, &dberr);
+        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Ezechiele', 123412341235,   'viene dalla bibbia', -15,    0, 'Paypal 1');", 0, 0, &dberr);
+        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Ezechiele', 123412341237,   'viene dalla bibbia', -07,    1, 'Paypal 1');", 0, 0, &dberr);
+        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Carmelo',   123412341254, 'mi ha chiamato bello',  17.35, 1, 'Paypal 2');", 0, 0, &dberr);
+        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Carmelo',   123412341255,                     '',  15,    0, 'Paypal 2');", 0, 0, &dberr);
+        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Ezechiele', 123412341255,   'viene dalla bibbia', -10,    1, 'Paypal 2');", 0, 0, &dberr);
+        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Ezechiele', 123412341257,   'viene dalla bibbia', -10,    0, 'Paypal 2');", 0, 0, &dberr);
+        Assert(!dberr);
+
+
         Input input = {};
         MSG Message = {};
         u32 Count = 0;
@@ -363,7 +531,11 @@ WinMain(
                         case WM_RBUTTONDOWN: { mouse_down(mouse_right);  } break;
                         case WM_RBUTTONUP:   { mouse_up  (mouse_right);  } break;
                         case WM_MBUTTONDOWN: { mouse_down(mouse_middle); } break;
-                        case WM_MBUTTONUP:   { mouse_up  (mouse_middle); } break;
+                        case WM_MBUTTONUP:  { mouse_up  (mouse_middle); } break;
+                        case WM_MOUSEWHEEL: 
+                        {
+                            input.mouse.wheel = GET_WHEEL_DELTA_WPARAM(Message.wParam);
+                        } break;
 
                         default:
                         {
@@ -380,12 +552,51 @@ WinMain(
             ImGui_ImplWin32_NewFrame();
             ImGui::NewFrame();
             io.MouseDown[0] = input.held.mouse_left;
+            io.MouseWheel = (r32)input.mouse.wheel;
+            char text_buffer[500] = {};
 
             renderer.set_render_targets();
             renderer.clear({0.06f, 0.1f, 0.15f});
             game_update_and_render(&GameMemory);
 
-            ImGui::ShowDemoWindow();
+            ImGui::Begin("IziWallet", 0, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar);
+            ImGui::SetWindowSize(ImVec2((r32)global_width, (r32)global_height));
+            ImGui::SetWindowPos(ImVec2(0, 0));
+            ImGui::Text("Transactions");
+
+            Saldo saldo = {};
+
+            credit_count(&saldo);
+
+            sprintf_s(text_buffer, "Saldo Effettivo: %.2f", saldo.effective);
+            if (ImGui::Button(text_buffer))
+                ImGui::OpenPopup("popup_credit");
+            if (ImGui::BeginPopup("popup_credit"))
+            {
+                sprintf_s(text_buffer, "Saldo Previsto: %.2f", saldo.expected);
+                ImGui::Text(text_buffer);
+                sprintf_s(text_buffer, "Credito: %.2f", saldo.credit);
+                ImGui::Text(text_buffer);
+                ImGui::EndPopup();
+            }
+
+            ImGui::Text("");
+            ImGui::Text("");
+            ImGui::Text("");
+            ImGui::Text("Movimenti");
+            ImGui::Columns(6, "movimenti");
+            ImGui::Separator();
+            ImGui::Text("Cliente");  ImGui::NextColumn();
+            ImGui::Text("Data");  ImGui::NextColumn();
+            ImGui::Text("Dettagli");  ImGui::NextColumn();
+            ImGui::Text("Entrata/Usicta");  ImGui::NextColumn();
+            ImGui::Text("Attivita/Passivita");  ImGui::NextColumn();
+            ImGui::Text("Tasca");  ImGui::NextColumn();
+            ImGui::Separator();
+            sqlite3_exec(global_db, "SELECT * FROM movimenti;", display_transaction, 0, &dberr);
+            Assert(!dberr);
+
+            ImGui::End();
 
             ImGui::Render();
             ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
