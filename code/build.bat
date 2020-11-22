@@ -12,6 +12,6 @@ pushd ..\build
 
 REM 64-bit build
 del *.pdb > NUL 2> NUL
-cl %CommonCompilerFlags% ..\code\win32_layer.cpp -Fmwin32_windy.map /link %CommonLinkerFlags% d3d11.lib
+cl %CommonCompilerFlags% ..\code\win32_layer.cpp -Fmwin32_windy.map -I..\imgui /link %CommonLinkerFlags% d3d11.lib
 popd
 

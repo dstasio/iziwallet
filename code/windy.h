@@ -9,7 +9,7 @@
 #include "windy_platform.h"
 
 #if WINDY_DEBUG
-#define Assert(expr) if(!(expr)) {*(int *)0 = 0;}
+#define Assert(expr) do {if(!(expr)) {*(int *)0 = 0;}} while(0)
 #else
 #define Assert(expr)
 #endif

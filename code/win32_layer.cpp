@@ -15,6 +15,15 @@
 #include "win32_layer.h"
 #include <stdio.h>
 
+#include "backends/imgui_impl_dx11.cpp"
+#include "backends/imgui_impl_win32.cpp"
+#include "imgui.cpp"
+//#include "imgui.h"
+#include "imgui_draw.cpp"
+//#include "imgui_internal.h"
+#include "imgui_widgets.cpp"
+#include "imgui_demo.cpp"
+
 #if WINDY_INTERNAL
 #define output_string(s, ...)        {char Buffer[100];sprintf_s(Buffer, s, __VA_ARGS__);OutputDebugStringA(Buffer);}
 #define throw_error_and_exit(e, ...) {output_string(" ------------------------------[ERROR] " ## e, __VA_ARGS__); getchar(); global_error = true;}
@@ -31,8 +40,8 @@
 #define key_down(code, key)    {if(Message.wParam == (code))  input.held.key = 1;}
 #define key_up(code, key)      {if(Message.wParam == (code)) {input.held.key = 0;input.pressed.key = 1;}}
 #define raw_mouse_button(id, key)  {if(raw_mouse.usButtonFlags & RI_MOUSE_BUTTON_ ## id ##_DOWN)  input.held.key = 1; else if (raw_mouse.usButtonFlags & RI_MOUSE_BUTTON_ ## id ##_UP) {input.held.key = 0;input.pressed.key = 1;}}
-#define mouse_down(id, key)    
-#define mouse_up(id, key)      
+#define mouse_down(key)    {input.held.key = 1;}
+#define mouse_up(key)      {{input.held.key = 0;input.pressed.key = 1;}}
 #define file_time_to_u64(wt) ((wt).dwLowDateTime | ((u64)((wt).dwHighDateTime) << 32))
 
 global b32 global_running;
@@ -200,18 +209,18 @@ WinMain(
     WindowDimensions.right -= WindowDimensions.left;
     WindowDimensions.bottom -= WindowDimensions.top;
 
-    HWND MainWindow = CreateWindowA("WindyClass", "Windy3",
+    HWND main_window = CreateWindowA("WindyClass", "Windy3",
                                     WS_OVERLAPPEDWINDOW|WS_VISIBLE,
                                     CW_USEDEFAULT, CW_USEDEFAULT,
                                     WindowDimensions.right,
                                     WindowDimensions.bottom,
                                     0, 0, Instance, 0);
 
-    if(MainWindow)
+    if(main_window)
     {
         ShowCursor(1);
         RECT window_rect = {};
-        GetWindowRect(MainWindow, &window_rect);
+        GetWindowRect(main_window, &window_rect);
         u32 window_width  = window_rect.right - window_rect.left;
         u32 window_height = window_rect.bottom - window_rect.top;
 
@@ -249,7 +258,7 @@ WinMain(
         swap_chain_desc.SampleDesc = {1, 0};
         swap_chain_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
         swap_chain_desc.BufferCount = 2;
-        swap_chain_desc.OutputWindow = MainWindow;
+        swap_chain_desc.OutputWindow = main_window;
         swap_chain_desc.Windowed = true;
         swap_chain_desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
         swap_chain_desc.Flags;
@@ -271,6 +280,11 @@ WinMain(
 
         renderer.load_renderer(&renderer);
 
+        ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO();
+        ImGui_ImplWin32_Init(main_window);
+        ImGui_ImplDX11_Init(d11.device, d11.context);
+
         Input input = {};
         MSG Message = {};
         u32 Count = 0;
@@ -288,7 +302,7 @@ WinMain(
             r32 dtime = (r32)(current_performance_counter - last_performance_counter) / (r32)performance_counter_frequency;
             while(dtime <= target_ms_per_frame)
             {
-                while(PeekMessageA(&Message, MainWindow, 0, 0, PM_REMOVE))
+                while(PeekMessageA(&Message, main_window, 0, 0, PM_REMOVE))
                 {
                     switch(Message.message)
                     {
@@ -344,6 +358,13 @@ WinMain(
                             input.mouse.y = (r32)(((i16*)&Message.lParam)[1]) / global_height;
                         } break;
 
+                        case WM_LBUTTONDOWN: { mouse_down(mouse_left);   } break;
+                        case WM_LBUTTONUP:   { mouse_up  (mouse_left);   } break;
+                        case WM_RBUTTONDOWN: { mouse_down(mouse_right);  } break;
+                        case WM_RBUTTONUP:   { mouse_up  (mouse_right);  } break;
+                        case WM_MBUTTONDOWN: { mouse_down(mouse_middle); } break;
+                        case WM_MBUTTONUP:   { mouse_up  (mouse_middle); } break;
+
                         default:
                         {
                             TranslateMessage(&Message);
@@ -355,9 +376,19 @@ WinMain(
                 dtime = (r32)(current_performance_counter - last_performance_counter) / (r32)performance_counter_frequency;
             }
 
+            ImGui_ImplDX11_NewFrame();
+            ImGui_ImplWin32_NewFrame();
+            ImGui::NewFrame();
+            io.MouseDown[0] = input.held.mouse_left;
+
             renderer.set_render_targets();
             renderer.clear({0.06f, 0.1f, 0.15f});
             game_update_and_render(&GameMemory);
+
+            ImGui::ShowDemoWindow();
+
+            ImGui::Render();
+            ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
             last_performance_counter = current_performance_counter;
             d11.swap_chain->Present(0, 0);
