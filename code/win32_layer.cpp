@@ -209,7 +209,7 @@ void credit_count(Saldo *saldo)
 
 struct Linked_Transaction
 {
-    u32 date;
+    u64 date;
     r32 value;
     b32 promised;
     char comment[64];
@@ -220,7 +220,7 @@ struct Linked_Transaction
 struct Transactor
 {
     char name[64];
-    u32 last_date;
+    u64 last_date;
     r32 total_value;
     r32 total_promised;
     Linked_Transaction *transactions;
@@ -250,7 +250,7 @@ int store_transaction(void *input, int n_cols, char **cols, char **col_names)
     while (*tsaction) {tsaction = (Linked_Transaction **)&(*tsaction)->next;}
     *tsaction = push_struct(Linked_Transaction);
 
-    sscanf_s(cols[COL_date],    "%u", &(*tsaction)->date);
+    sscanf_s(cols[COL_date],    "%llu", &(*tsaction)->date);
     sscanf_s(cols[COL_value],   "%f", &(*tsaction)->value);
     sscanf_s(cols[COL_promise], "%d", &(*tsaction)->promised);
     strcpy((*tsaction)->comment, cols[COL_comment]);
@@ -446,6 +446,7 @@ WinMain(
         io = &ImGui::GetIO();
         ImGui_ImplWin32_Init(main_window);
         ImGui_ImplDX11_Init(d11.device, d11.context);
+        //ImGui::StyleColorsClassic();
 
 
         // ===========================================================================================
@@ -513,7 +514,7 @@ WinMain(
             char text_buffer[500] = {};
 
             renderer.set_render_targets();
-            renderer.clear({0.06f, 0.3f, 0.45f});
+            renderer.clear({1.f, 1.f, 1.f});//{0.06f, 0.3f, 0.45f});
 
             ImGui::Begin("IziWallet", 0, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar);
             ImGui::SetWindowSize(ImVec2((r32)global_width, (r32)global_height));
@@ -559,7 +560,9 @@ WinMain(
                     selections[trans_index] = !selections[trans_index];
                 ImGui::NextColumn();
 
-                sprintf_s(text_buffer, "%u", tsactor->last_date);
+                SYSTEMTIME st = {};
+                FileTimeToSystemTime((FILETIME *)&tsactor->last_date, &st);
+                sprintf_s(text_buffer, "%02d/%02d/%d %02d:%02d:%02d.%d", st.wDay, st.wMonth, st.wYear, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
                 ImGui::Text(text_buffer);                                    ImGui::NextColumn();
 
                 ImGui::Text("");                                             ImGui::NextColumn();
@@ -579,7 +582,8 @@ WinMain(
                     {
                         ImGui::NextColumn();
 
-                        sprintf_s(text_buffer, "%u", tsactor->last_date);
+                        FileTimeToSystemTime((FILETIME *)&tsaction->date, &st);
+                        sprintf_s(text_buffer, "%02d/%02d/%d %02d:%02d:%02d.%d", st.wDay, st.wMonth, st.wYear, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
                         ImGui::Text(text_buffer);                                    ImGui::NextColumn();
 
                         ImGui::Text(tsaction->comment);                              ImGui::NextColumn();
@@ -605,8 +609,54 @@ WinMain(
                 ImGui::Separator();
             }
 
-            local_persist char buf_client[64] = {};
-            ImGui::InputText("", buf_client, 64);
+            char *paypals[] = {"Paypal 1", "Paypal 2", "Paypal 3"};
+            static int paypal_current = 0;
+
+            local_persist char buf_client [64] = {};
+            local_persist char buf_comment[64] = {};
+            local_persist char buf_value  [64] = {};
+            local_persist char buf_promise[64] = {};
+            ImGui::InputText("cl", buf_client,  64);      ImGui::NextColumn();      ImGui::NextColumn();
+            ImGui::InputText("co", buf_comment, 64);      ImGui::NextColumn();
+            ImGui::InputText("va", buf_value,   64);      ImGui::NextColumn();
+            ImGui::InputText("pr", buf_promise, 64);      ImGui::NextColumn();
+            if (ImGui::BeginCombo("", paypals[paypal_current]))
+            {
+                for (int n = 0; n < 3; n++)
+                {
+                    const bool is_selected = (paypal_current == n);
+                    if (ImGui::Selectable(paypals[n], is_selected))
+                        paypal_current = n;
+
+                    // Set the initial focus when opening the combo (scrolling + keyboard navigation focus)
+                    if (is_selected)
+                        ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+
+            ImGui::NextColumn();
+            ImGui::Columns(1);
+            if (ImGui::Button("Inserisci"))
+            {
+                Assert((!buf_value[0]) != (!buf_promise[0]));
+                SYSTEMTIME system_time = {};
+                FILETIME epoch = {};
+                GetSystemTime(&system_time);
+                SystemTimeToFileTime(&system_time, &epoch);
+
+                b32 is_promise = !!buf_promise[0];
+                sprintf_s(text_buffer, "INSERT OR IGNORE INTO movimenti VALUES ('%s', %llu, '%s', %s, %d, '%s');", buf_client, *((u64 *)&epoch), buf_comment, is_promise ? buf_promise : buf_value, is_promise, paypals[paypal_current]);
+                sqlite3_exec(global_db, text_buffer, 0, 0, &dberr);
+                Assert(!dberr);
+
+                i64 last_rowid = sqlite3_last_insert_rowid(global_db);
+                if (last_rowid)
+                {
+                    sprintf_s(text_buffer, "SELECT * FROM movimenti WHERE rowid = %lld;", last_rowid);
+                    sqlite3_exec(global_db, text_buffer, store_transaction, 0, &dberr);
+                }
+            }
 
             ImGui::End();
 
