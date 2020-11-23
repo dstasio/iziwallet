@@ -4,3 +4,4 @@ build/*
 *.*sh  
 backup/*
 config/session.vim
+release/
