@@ -1,7 +1,7 @@
 /* ========================================================================
    $File: $
    $Date: $
-   $Revision: $
+   $Version: 0.1 $
    $Creator: Davide Stasio $
    $Notice: (C) Copyright 2014 by Davide Stasio. All Rights Reserved. $
    ======================================================================== */
@@ -54,6 +54,15 @@ global u32 global_height = 720;
 global Platform_Renderer *global_renderer;
 global Memory_Pool global_memory = {};
 global ImGuiIO *io;
+
+inline r32
+Max(r32 a, r32 b)
+{
+    r32 result = a;
+    if (b > a)
+        result = b;
+    return result;
+}
 
 inline u64
 win32_get_last_write_time(char *Path)
@@ -144,68 +153,10 @@ struct Saldo
     r32 effective;
     r32 expected;
     r32 credit;
+    
+    r32 paypals[3];
+    char paypal_ids[3][32];
 };
-
-#define COL_client   0
-#define COL_date     1
-#define COL_comment  2
-#define COL_value    3
-#define COL_promise  4
-#define COL_wallet   5
-int credit_count_step(void *input, int n_cols, char **cols, char **col_names)
-{
-    Saldo *saldo = (Saldo *)input;
-    char *c = *cols;
-    int col_index = 0;
-
-    r32 value = 0;
-    b32 promise = 0;
-    while (col_index < n_cols)
-    {
-        switch (col_index)
-        {
-            case COL_client:
-            {
-            } break;
-            case COL_date:
-            {
-            } break;
-            case COL_comment:
-            {
-            } break;
-            case COL_value:
-            {
-                sscanf_s(c, "%f", &value);
-            } break;
-            case COL_promise:
-            {
-                sscanf_s(c, "%d", &promise);
-            } break;
-            case COL_wallet:
-            {
-            } break;
-        }
-        c = cols[++col_index];
-    }
-
-    if (promise)
-    {
-        saldo->credit += value;
-    }
-    else
-    {
-        saldo->effective += value;
-    }
-    return 0;
-}
-
-void credit_count(Saldo *saldo)
-{
-    char *err = 0;
-    sqlite3_exec(global_db, "SELECT * FROM movimenti;", credit_count_step, (void *)saldo, &err);
-    Assert(!err);
-    saldo->expected = saldo->effective + saldo->credit;
-}
 
 struct Linked_Transaction
 {
@@ -225,6 +176,67 @@ struct Transactor
     r32 total_promised;
     Linked_Transaction *transactions;
 };
+
+int init_paypals(void *input, int n_cols, char **cols, char **col_names)
+{
+    Saldo *saldo = (Saldo *)input;
+    local_persist int p = 0;
+    strcpy(saldo->paypal_ids[p++], cols[0]);
+    return 0;
+}
+
+#define COL_client   0
+#define COL_date     1
+#define COL_comment  2
+#define COL_value    3
+#define COL_promise  4
+#define COL_wallet   5
+int credit_count_step(void *input, int n_cols, char **cols, char **col_names)
+{
+    Saldo *saldo = (Saldo *)input;
+
+    r32 value = 0;
+    b32 promise = 0;
+    sscanf_s(cols[COL_value],   "%f", &value);
+    sscanf_s(cols[COL_promise], "%d", &promise);
+
+    if (promise)
+        saldo->credit += value;
+    else
+    {
+        saldo->effective += value;
+
+        u32 p_index = 0;
+        sscanf_s(cols[COL_wallet], "Paypal %u", &p_index);
+        Assert(p_index < 3);
+        saldo->paypals[p_index] += value;
+    }
+
+    return 0;
+}
+
+void credit_count(Saldo *saldo)
+{
+    char *err = 0;
+    sqlite3_exec(global_db, "SELECT * FROM movimenti;", credit_count_step, (void *)saldo, &err);
+    Assert(!err);
+    saldo->expected = saldo->effective + saldo->credit;
+}
+
+void credit_manual_add(Saldo *saldo, Linked_Transaction *tsaction)
+{
+    if (tsaction->promised)
+        saldo->credit += tsaction->promised;
+    else
+    {
+        saldo->effective += tsaction->value;
+
+        u32 p_index = 0;
+        sscanf_s(tsaction->wallet, "Paypal %u", &p_index);
+        Assert(p_index < 3);
+        saldo->paypals[p_index] += tsaction->value;
+    }
+}
 
 global Transactor global_transactors[50];
 global u32 n_transactors;
@@ -259,6 +271,11 @@ int store_transaction(void *input, int n_cols, char **cols, char **col_names)
     if ((*tsaction)->promised)                      transactor->total_promised += (*tsaction)->value;
     else                                            transactor->total_value += (*tsaction)->value;
     if ((*tsaction)->date > transactor->last_date)  transactor->last_date = (*tsaction)->date;
+
+    if (input)
+    {
+        credit_manual_add((Saldo *)input, *tsaction);
+    }
 
     return 0;
 }
@@ -372,7 +389,7 @@ WinMain(
     WindowDimensions.right -= WindowDimensions.left;
     WindowDimensions.bottom -= WindowDimensions.top;
 
-    HWND main_window = CreateWindowA("WindyClass", "Windy3",
+    HWND main_window = CreateWindowA("WindyClass", "Iziwallet beta 0.1",
                                     WS_OVERLAPPEDWINDOW|WS_VISIBLE,
                                     CW_USEDEFAULT, CW_USEDEFAULT,
                                     WindowDimensions.right,
@@ -452,32 +469,34 @@ WinMain(
         // ===========================================================================================
         // Sqlite3 
         // ===========================================================================================
+        Saldo saldo = {};
+
         char *dberr = 0;
         sqlite3_open("data.db", &global_db);
-        sqlite3_exec(global_db, "CREATE TABLE IF NOT EXISTS saldo(name TEXT PRIMARY KEY, comment TEXT, value REAL NOT NULL);", 0, 0, &dberr);
-        //sqlite3_exec(global_db, "INSERT OR IGNORE INTO saldo VALUES ('Entrate',   '', 0);", 0, 0, &dberr);
-        //sqlite3_exec(global_db, "INSERT OR IGNORE INTO saldo VALUES ('Usicte',    '', 0);", 0, 0, &dberr);
-        //sqlite3_exec(global_db, "INSERT OR IGNORE INTO saldo VALUES ('Attivita',  '', 0);", 0, 0, &dberr);
-        //sqlite3_exec(global_db, "INSERT OR IGNORE INTO saldo VALUES ('Passivita', '', 0);", 0, 0, &dberr);
-        sqlite3_exec(global_db, "INSERT OR IGNORE INTO saldo VALUES ('Paypal 1', 'Paypal di Giacomo', 0);", 0, 0, &dberr);
-        sqlite3_exec(global_db, "INSERT OR IGNORE INTO saldo VALUES ('Paypal 2', 'Paypal di Angelo', 0);", 0, 0, &dberr);
-        sqlite3_exec(global_db, "INSERT OR IGNORE INTO saldo VALUES ('Paypal 3', 'Paypal di Lello', 0);", 0, 0, &dberr);
+        sqlite3_exec(global_db, "CREATE TABLE IF NOT EXISTS saldo(nome TEXT PRIMARY KEY, dettagli TEXT, valore REAL NOT NULL);", 0, 0, &dberr);
+        sqlite3_exec(global_db, "INSERT OR IGNORE INTO saldo VALUES ('Paypal 0', 'Paypal di Giacomo', 0);", 0, 0, &dberr);
+        sqlite3_exec(global_db, "INSERT OR IGNORE INTO saldo VALUES ('Paypal 1', 'Paypal di Angelo', 0);", 0, 0, &dberr);
+        sqlite3_exec(global_db, "INSERT OR IGNORE INTO saldo VALUES ('Paypal 2', 'Paypal di Lello', 0);", 0, 0, &dberr);
 
         sqlite3_exec(global_db, "CREATE TABLE IF NOT EXISTS\
-                     movimenti(cliente TEXT, data INT, commento TEXT, valore REAL NOT NULL, promessa BOOL, tasca TEXT, PRIMARY KEY (cliente, data), FOREIGN KEY(tasca) REFERENCES saldo(name));",
+                     movimenti(cliente TEXT, data INT, dettagli TEXT, valore REAL NOT NULL, promessa BOOL, tasca TEXT, PRIMARY KEY (cliente, data), FOREIGN KEY(tasca) REFERENCES saldo(name));",
                      0, 0, &dberr);
-        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Carmelo',   123412341234, 'mi ha chiamato bello',  17.35, 1, 'Paypal 1');", 0, 0, &dberr);
-        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Carmelo',   123412341235,                     '',  15,    0, 'Paypal 1');", 0, 0, &dberr);
-        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Ezechiele', 123412341235,   'viene dalla bibbia', -15,    0, 'Paypal 1');", 0, 0, &dberr);
-        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Ezechiele', 123412341237,   'viene dalla bibbia', -07,    1, 'Paypal 1');", 0, 0, &dberr);
-        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Carmelo',   123412341254, 'mi ha chiamato bello',  17.35, 1, 'Paypal 2');", 0, 0, &dberr);
-        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Carmelo',   123412341255,                     '',  15,    0, 'Paypal 2');", 0, 0, &dberr);
-        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Ezechiele', 123412341255,   'viene dalla bibbia', -10,    1, 'Paypal 2');", 0, 0, &dberr);
-        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Ezechiele', 123412341257,   'viene dalla bibbia', -10,    0, 'Paypal 2');", 0, 0, &dberr);
+//        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Carmelo',   123412341234, 'mi ha chiamato bello',  17.35, 1, 'Paypal 0');", 0, 0, &dberr);
+//        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Carmelo',   123412341235,                     '',  15,    0, 'Paypal 0');", 0, 0, &dberr);
+//        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Ezechiele', 123412341235,   'viene dalla bibbia', -15,    0, 'Paypal 0');", 0, 0, &dberr);
+//        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Ezechiele', 123412341237,   'viene dalla bibbia', -07,    1, 'Paypal 0');", 0, 0, &dberr);
+//        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Carmelo',   123412341254, 'mi ha chiamato bello',  17.35, 1, 'Paypal 1');", 0, 0, &dberr);
+//        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Carmelo',   123412341255,                     '',  15,    0, 'Paypal 1');", 0, 0, &dberr);
+//        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Ezechiele', 123412341255,   'viene dalla bibbia', -10,    1, 'Paypal 1');", 0, 0, &dberr);
+//        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Ezechiele', 123412341257,   'viene dalla bibbia', -10,    0, 'Paypal 1');", 0, 0, &dberr);
+        Assert(!dberr);
+
+        sqlite3_exec(global_db, "SELECT dettagli FROM saldo WHERE nome LIKE 'Paypal%' ORDER BY rowid;", init_paypals, (void *)&saldo, &dberr);
         Assert(!dberr);
 
         sqlite3_exec(global_db, "SELECT * FROM movimenti;", store_transaction, 0, &dberr);
         Assert(!dberr);
+        credit_count(&saldo);
 
         MSG Message = {};
         u32 Count = 0;
@@ -519,23 +538,25 @@ WinMain(
             ImGui::Begin("IziWallet", 0, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar);
             ImGui::SetWindowSize(ImVec2((r32)global_width, (r32)global_height));
             ImGui::SetWindowPos(ImVec2(0, 0));
-            ImGui::Text("Transactions");
 
-            Saldo saldo = {};
-
-            credit_count(&saldo);
-
+            ImGui::Columns(2, "saldo");
             sprintf_s(text_buffer, "Saldo Effettivo: %.2f", saldo.effective);
-            if (ImGui::Button(text_buffer))
-                ImGui::OpenPopup("popup_credit");
-            if (ImGui::BeginPopup("popup_credit"))
-            {
-                sprintf_s(text_buffer, "Saldo Previsto: %.2f", saldo.expected);
-                ImGui::Text(text_buffer);
-                sprintf_s(text_buffer, "Credito: %.2f", saldo.credit);
-                ImGui::Text(text_buffer);
-                ImGui::EndPopup();
-            }
+            ImGui::Text(text_buffer);
+            sprintf_s(text_buffer, "Saldo Previsto: %.2f", saldo.expected);
+            ImGui::Text(text_buffer);
+            sprintf_s(text_buffer, "Credito: %.2f", saldo.credit);
+            ImGui::Text(text_buffer);
+
+            ImGui::NextColumn();
+
+            sprintf_s(text_buffer, "%s: %.2f", saldo.paypal_ids[0], saldo.paypals[0]);
+            ImGui::Text(text_buffer);
+            sprintf_s(text_buffer, "%s: %.2f", saldo.paypal_ids[1], saldo.paypals[1]);
+            ImGui::Text(text_buffer);
+            sprintf_s(text_buffer, "%s: %.2f", saldo.paypal_ids[2], saldo.paypals[2]);
+            ImGui::Text(text_buffer);
+
+            ImGui::Columns(1);
 
             ImGui::Text("");
             ImGui::Text("");
@@ -570,7 +591,7 @@ WinMain(
                 sprintf_s(text_buffer, "% .2f", tsactor->total_value);
                 ImGui::Text(text_buffer);                                    ImGui::NextColumn();
 
-                sprintf_s(text_buffer, "% .2f", tsactor->total_promised);
+                sprintf_s(text_buffer, "% .2f", Max(tsactor->total_promised - tsactor->total_value, 0.f));
                 ImGui::Text(text_buffer);                                    ImGui::NextColumn();
                 
                 ImGui::Text("TODO");                                         ImGui::NextColumn();
@@ -609,7 +630,6 @@ WinMain(
                 ImGui::Separator();
             }
 
-            char *paypals[] = {"Paypal 1", "Paypal 2", "Paypal 3"};
             static int paypal_current = 0;
 
             local_persist char buf_client [64] = {};
@@ -618,14 +638,14 @@ WinMain(
             local_persist char buf_promise[64] = {};
             ImGui::InputText("cl", buf_client,  64);      ImGui::NextColumn();      ImGui::NextColumn();
             ImGui::InputText("co", buf_comment, 64);      ImGui::NextColumn();
-            ImGui::InputText("va", buf_value,   64);      ImGui::NextColumn();
-            ImGui::InputText("pr", buf_promise, 64);      ImGui::NextColumn();
-            if (ImGui::BeginCombo("", paypals[paypal_current]))
+            ImGui::InputText("va", buf_value,   64, ImGuiInputTextFlags_CharsDecimal);      ImGui::NextColumn();
+            ImGui::InputText("pr", buf_promise, 64, ImGuiInputTextFlags_CharsDecimal);      ImGui::NextColumn();
+            if (ImGui::BeginCombo("", saldo.paypal_ids[paypal_current]))
             {
                 for (int n = 0; n < 3; n++)
                 {
                     const bool is_selected = (paypal_current == n);
-                    if (ImGui::Selectable(paypals[n], is_selected))
+                    if (ImGui::Selectable(saldo.paypal_ids[n], is_selected))
                         paypal_current = n;
 
                     // Set the initial focus when opening the combo (scrolling + keyboard navigation focus)
@@ -646,7 +666,7 @@ WinMain(
                 SystemTimeToFileTime(&system_time, &epoch);
 
                 b32 is_promise = !!buf_promise[0];
-                sprintf_s(text_buffer, "INSERT OR IGNORE INTO movimenti VALUES ('%s', %llu, '%s', %s, %d, '%s');", buf_client, *((u64 *)&epoch), buf_comment, is_promise ? buf_promise : buf_value, is_promise, paypals[paypal_current]);
+                sprintf_s(text_buffer, "INSERT OR IGNORE INTO movimenti VALUES ('%s', %llu, '%s', %s, %d, 'Paypal %1u');", buf_client, *((u64 *)&epoch), buf_comment, is_promise ? buf_promise : buf_value, is_promise, paypal_current);
                 sqlite3_exec(global_db, text_buffer, 0, 0, &dberr);
                 Assert(!dberr);
 
@@ -654,7 +674,7 @@ WinMain(
                 if (last_rowid)
                 {
                     sprintf_s(text_buffer, "SELECT * FROM movimenti WHERE rowid = %lld;", last_rowid);
-                    sqlite3_exec(global_db, text_buffer, store_transaction, 0, &dberr);
+                    sqlite3_exec(global_db, text_buffer, store_transaction, (void *)&saldo, &dberr);
                 }
             }
 
