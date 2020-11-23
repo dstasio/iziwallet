@@ -1,5 +1,5 @@
 @echo off
-set CommonCompilerFlags=-diagnostics:column -MT -EHa- -GL -Oi -WX -W4 -wd4201 -wd4100 -wd4189 -wd4456 -wd4505 -DWINDY_INTERNAL=1 -DWINDY_DEBUG=1
+set CommonCompilerFlags=-diagnostics:column -MT -EHa- -GL -Oi -WX -W4 -wd4201 -wd4100 -wd4189 -wd4456 -wd4505 -DWINDY_INTERNAL=1 -DWINDY_DEBUG=0
 set CommonLinkerFlags=-incremental:no -opt:ref user32.lib
 
 IF NOT EXIST ..\release mkdir ..\release

@@ -9,9 +9,6 @@
 #include <windows.h>
 #include <d3d11.h>
 
-#include "windy.h"
-#include "windy_platform.h"
-
 #include "win32_layer.h"
 #include <stdio.h>
 
@@ -75,8 +72,7 @@ win32_get_last_write_time(char *Path)
     return result;
 }
 
-internal
-PLATFORM_READ_FILE(win32_read_file)
+internal Input_File win32_read_file(char *Path)
 {
     Input_File Result = {};
     HANDLE FileHandle = CreateFileA(Path, GENERIC_READ, FILE_SHARE_READ, 0,
@@ -114,8 +110,7 @@ PLATFORM_READ_FILE(win32_read_file)
     return(Result);
 }
 
-internal 
-PLATFORM_RELOAD_CHANGED_FILE(win32_reload_file_if_changed)
+internal b32 win32_reload_file_if_changed(Input_File *file)
 {
     b32 has_changed = false;
     u64 current_write_time = win32_get_last_write_time(file->path);
@@ -372,7 +367,7 @@ WinMain(
     // @todo add support for low-resolution performance counters
     // @todo maybe add support for 32-bit
     i64 performance_counter_frequency = 0;
-    Assert(QueryPerformanceFrequency((LARGE_INTEGER *)&performance_counter_frequency));
+    AssertKeep(QueryPerformanceFrequency((LARGE_INTEGER *)&performance_counter_frequency));
     // @todo make this hardware-dependant
     r32 target_ms_per_frame = 1.f/60.f;
 
@@ -418,9 +413,6 @@ WinMain(
         // @todo: probably a global variable is a good idea?
         Platform_Renderer renderer = {};
         D11_Renderer d11 = {};
-        renderer.load_renderer    = win32_load_d3d11;
-        renderer.clear               = d3d11_clear;
-        renderer.set_render_targets  = d3d11_set_default_render_targets;
         renderer.platform = (void *)&d11;
         global_renderer = &renderer;
 
@@ -446,7 +438,11 @@ WinMain(
             0,
             D3D_DRIVER_TYPE_HARDWARE,
             0,
+#if WINDY_DEBUG
             D3D11_CREATE_DEVICE_BGRA_SUPPORT|D3D11_CREATE_DEVICE_DEBUG,
+#else
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+#endif
             0,
             0,
             D3D11_SDK_VERSION,
@@ -457,13 +453,13 @@ WinMain(
             &d11.context
         );
 
-        renderer.load_renderer(&renderer);
+        win32_load_d3d11(&renderer);
 
         ImGui::CreateContext();
         io = &ImGui::GetIO();
         ImGui_ImplWin32_Init(main_window);
         ImGui_ImplDX11_Init(d11.device, d11.context);
-        //ImGui::StyleColorsClassic();
+//        ImGui::StyleColorsLight();
 
 
         // ===========================================================================================
@@ -503,10 +499,10 @@ WinMain(
 
         i64 last_performance_counter = 0;
         i64 current_performance_counter = 0;
-        Assert(QueryPerformanceCounter((LARGE_INTEGER *)&last_performance_counter));
+        AssertKeep(QueryPerformanceCounter((LARGE_INTEGER *)&last_performance_counter));
         while(global_running && !global_error)
         {
-            Assert(QueryPerformanceCounter((LARGE_INTEGER *)&current_performance_counter));
+            AssertKeep(QueryPerformanceCounter((LARGE_INTEGER *)&current_performance_counter));
             r32 dtime = (r32)(current_performance_counter - last_performance_counter) / (r32)performance_counter_frequency;
             while(dtime <= target_ms_per_frame)
             {
@@ -523,7 +519,7 @@ WinMain(
                     TranslateMessage(&Message);
                     DispatchMessage(&Message);
                 }
-                Assert(QueryPerformanceCounter((LARGE_INTEGER *)&current_performance_counter));
+                AssertKeep(QueryPerformanceCounter((LARGE_INTEGER *)&current_performance_counter));
                 dtime = (r32)(current_performance_counter - last_performance_counter) / (r32)performance_counter_frequency;
             }
 
@@ -532,8 +528,8 @@ WinMain(
             ImGui::NewFrame();
             char text_buffer[500] = {};
 
-            renderer.set_render_targets();
-            renderer.clear({1.f, 1.f, 1.f});//{0.06f, 0.3f, 0.45f});
+            d3d11_set_default_render_targets();
+            d3d11_clear({1.f, 1.f, 1.f});//{0.06f, 0.3f, 0.45f});
 
             ImGui::Begin("IziWallet", 0, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar);
             ImGui::SetWindowSize(ImVec2((r32)global_width, (r32)global_height));
