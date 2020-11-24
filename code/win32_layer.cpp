@@ -5,6 +5,11 @@
    $Creator: Davide Stasio $
    $Notice: (C) Copyright 2014 by Davide Stasio. All Rights Reserved. $
    ======================================================================== */
+#define MAX_TRANSACTION_DETAIL_LENGTH 64
+#define MAX_TRANSACTOR_NAME_LENGTH    32
+#define PAYPAL_NAME_INPUT_WIDTH       (256+128)
+#define MAX_PAYPAL_NAME_LENGTH        MAX_TRANSACTOR_NAME_LENGTH
+#define MAX_PAYPALS                   10
 
 #include <windows.h>
 #include <d3d11.h>
@@ -149,8 +154,9 @@ struct Saldo
     r32 expected;
     r32 credit;
     
-    r32 paypals[3];
-    char paypal_ids[3][32];
+    r32 paypals[MAX_PAYPALS];
+    char paypal_ids[MAX_PAYPALS][MAX_PAYPAL_NAME_LENGTH];
+    u32 n_paypals;
 };
 
 struct Linked_Transaction
@@ -158,14 +164,14 @@ struct Linked_Transaction
     u64 date;
     r32 value;
     b32 promised;
-    char comment[64];
-    char wallet[32];
+    char details[MAX_TRANSACTION_DETAIL_LENGTH];
+    u32 wallet;
     void *next;
 };
 
 struct Transactor
 {
-    char name[64];
+    char name[MAX_TRANSACTOR_NAME_LENGTH];
     u64 last_date;
     r32 total_value;
     r32 total_promised;
@@ -175,14 +181,17 @@ struct Transactor
 int init_paypals(void *input, int n_cols, char **cols, char **col_names)
 {
     Saldo *saldo = (Saldo *)input;
-    local_persist int p = 0;
-    strcpy(saldo->paypal_ids[p++], cols[0]);
+    u32 index;
+    sscanf_s(cols[0], "%u", &index);
+
+    Assert((index-1) == saldo->n_paypals);
+    strcpy(saldo->paypal_ids[saldo->n_paypals++], cols[1]);
     return 0;
 }
 
 #define COL_client   0
 #define COL_date     1
-#define COL_comment  2
+#define COL_details  2
 #define COL_value    3
 #define COL_promise  4
 #define COL_wallet   5
@@ -227,9 +236,7 @@ void credit_manual_add(Saldo *saldo, Linked_Transaction *tsaction)
         saldo->effective += tsaction->value;
 
         u32 p_index = 0;
-        sscanf_s(tsaction->wallet, "Paypal %u", &p_index);
-        Assert(p_index < 3);
-        saldo->paypals[p_index] += tsaction->value;
+        saldo->paypals[tsaction->wallet] += tsaction->value;
     }
 }
 
@@ -260,8 +267,8 @@ int store_transaction(void *input, int n_cols, char **cols, char **col_names)
     sscanf_s(cols[COL_date],    "%llu", &(*tsaction)->date);
     sscanf_s(cols[COL_value],   "%f", &(*tsaction)->value);
     sscanf_s(cols[COL_promise], "%d", &(*tsaction)->promised);
-    strcpy((*tsaction)->comment, cols[COL_comment]);
-    strcpy((*tsaction)->wallet,  cols[COL_wallet]);
+    strcpy((*tsaction)->details, cols[COL_details]);
+    sscanf_s(cols[COL_wallet], "%u", &(*tsaction)->wallet);
 
     if ((*tsaction)->promised)                      transactor->total_promised += (*tsaction)->value;
     else                                            transactor->total_value += (*tsaction)->value;
@@ -284,7 +291,7 @@ LRESULT CALLBACK WindyProc(
     LPARAM l
 )
 {
-    LRESULT Result = 0;
+    LRESULT result = 1;
     switch(Message)
     {
         case WM_LBUTTONDOWN: { io->MouseDown[0] = 1; } break;
@@ -336,8 +343,18 @@ LRESULT CALLBACK WindyProc(
         // @todo: implement this
         case WM_SETCURSOR:
         {
-            HCURSOR arrow = LoadCursor(0, IDC_ARROW);
-            SetCursor(arrow);
+            if (LOWORD(l) == HTCLIENT && ImGui_ImplWin32_UpdateMouseCursor())
+            {}
+            else if ((LOWORD(l) == HTRIGHT) || (LOWORD(l) == HTLEFT))
+                SetCursor(LoadCursor(0, IDC_SIZEWE));
+            else if ((LOWORD(l) == HTTOP) || (LOWORD(l) == HTBOTTOM))
+                SetCursor(LoadCursor(0, IDC_SIZENS));
+            else if ((LOWORD(l) == HTBOTTOMLEFT) || (LOWORD(l) == HTTOPRIGHT))
+                SetCursor(LoadCursor(0, IDC_SIZENESW));
+            else if ((LOWORD(l) == HTBOTTOMRIGHT) || (LOWORD(l) == HTTOPLEFT))
+                SetCursor(LoadCursor(0, IDC_SIZENWSE));
+            else
+                result = 0;
         } break;
 
         case WM_CHAR:
@@ -350,10 +367,10 @@ LRESULT CALLBACK WindyProc(
 
         default:
         {
-            Result = DefWindowProcA(WindowHandle, Message, w, l);
+            result = DefWindowProcA(WindowHandle, Message, w, l);
         } break;
     }
-    return(Result);
+    return(result);
 }
 
 int
@@ -461,6 +478,7 @@ WinMain(
         ImGui_ImplWin32_Init(main_window);
         ImGui_ImplDX11_Init(d11.device, d11.context);
         ImGui::StyleColorsLight();
+        io->ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
 
         // ===========================================================================================
@@ -470,25 +488,14 @@ WinMain(
 
         char *dberr = 0;
         sqlite3_open("data.db", &global_db);
-        sqlite3_exec(global_db, "CREATE TABLE IF NOT EXISTS saldo(nome TEXT PRIMARY KEY, dettagli TEXT, valore REAL NOT NULL);", 0, 0, &dberr);
-        sqlite3_exec(global_db, "INSERT OR IGNORE INTO saldo VALUES ('Paypal 0', 'Paypal di Giacomo', 0);", 0, 0, &dberr);
-        sqlite3_exec(global_db, "INSERT OR IGNORE INTO saldo VALUES ('Paypal 1', 'Paypal di Angelo', 0);", 0, 0, &dberr);
-        sqlite3_exec(global_db, "INSERT OR IGNORE INTO saldo VALUES ('Paypal 2', 'Paypal di Lello', 0);", 0, 0, &dberr);
+        sqlite3_exec(global_db, "CREATE TABLE IF NOT EXISTS conti(nome TEXT PRIMARY KEY, valore REAL NOT NULL);", 0, 0, &dberr);
 
         sqlite3_exec(global_db, "CREATE TABLE IF NOT EXISTS\
-                     movimenti(cliente TEXT, data INT, dettagli TEXT, valore REAL NOT NULL, promessa BOOL, tasca TEXT, PRIMARY KEY (cliente, data), FOREIGN KEY(tasca) REFERENCES saldo(name));",
+                     movimenti(cliente TEXT, data INT, dettagli TEXT, valore REAL NOT NULL, promessa BOOL, tasca INT, PRIMARY KEY (cliente, data), FOREIGN KEY(tasca) REFERENCES saldo(rowid));",
                      0, 0, &dberr);
-//        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Carmelo',   123412341234, 'mi ha chiamato bello',  17.35, 1, 'Paypal 0');", 0, 0, &dberr);
-//        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Carmelo',   123412341235,                     '',  15,    0, 'Paypal 0');", 0, 0, &dberr);
-//        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Ezechiele', 123412341235,   'viene dalla bibbia', -15,    0, 'Paypal 0');", 0, 0, &dberr);
-//        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Ezechiele', 123412341237,   'viene dalla bibbia', -07,    1, 'Paypal 0');", 0, 0, &dberr);
-//        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Carmelo',   123412341254, 'mi ha chiamato bello',  17.35, 1, 'Paypal 1');", 0, 0, &dberr);
-//        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Carmelo',   123412341255,                     '',  15,    0, 'Paypal 1');", 0, 0, &dberr);
-//        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Ezechiele', 123412341255,   'viene dalla bibbia', -10,    1, 'Paypal 1');", 0, 0, &dberr);
-//        sqlite3_exec(global_db, "INSERT OR IGNORE INTO movimenti VALUES ('Ezechiele', 123412341257,   'viene dalla bibbia', -10,    0, 'Paypal 1');", 0, 0, &dberr);
         Assert(!dberr);
 
-        sqlite3_exec(global_db, "SELECT dettagli FROM saldo WHERE nome LIKE 'Paypal%' ORDER BY rowid;", init_paypals, (void *)&saldo, &dberr);
+        sqlite3_exec(global_db, "SELECT rowid,nome FROM conti ORDER BY rowid;", init_paypals, (void *)&saldo, &dberr);
         Assert(!dberr);
 
         sqlite3_exec(global_db, "SELECT * FROM movimenti;", store_transaction, 0, &dberr);
@@ -537,21 +544,54 @@ WinMain(
             ImGui::SetWindowPos(ImVec2(0, 0));
 
             ImGui::Columns(2, "saldo");
-            sprintf_s(text_buffer, "Saldo Effettivo: %.2f", saldo.effective);
-            ImGui::Text(text_buffer);
-            sprintf_s(text_buffer, "Saldo Previsto: %.2f", saldo.expected);
-            ImGui::Text(text_buffer);
-            sprintf_s(text_buffer, "Credito: %.2f", saldo.credit);
-            ImGui::Text(text_buffer);
+            ImGui::Text("Saldo Effettivo: %.2f", saldo.effective);
+            ImGui::Text("Saldo Previsto: %.2f", saldo.expected);
+            ImGui::Text("Credito: %.2f", saldo.credit);
 
             ImGui::NextColumn();
 
-            sprintf_s(text_buffer, "%s: %.2f", saldo.paypal_ids[0], saldo.paypals[0]);
-            ImGui::Text(text_buffer);
-            sprintf_s(text_buffer, "%s: %.2f", saldo.paypal_ids[1], saldo.paypals[1]);
-            ImGui::Text(text_buffer);
-            sprintf_s(text_buffer, "%s: %.2f", saldo.paypal_ids[2], saldo.paypals[2]);
-            ImGui::Text(text_buffer);
+            if (!saldo.n_paypals)
+            {
+                ImGui::TextColored(ImVec4(1.f, 0.2f, 0.f, 1.f), "Non ci sono conti PayPal!");
+            }
+            else
+            {
+                for (u32 paypal_id = 0; paypal_id < saldo.n_paypals; ++paypal_id)
+                {
+                    sprintf_s(text_buffer, "E##%u", paypal_id);
+                    local_persist s32 editing = -1;
+                    if (ImGui::Button(text_buffer) && (editing < 0))
+                        editing = paypal_id;
+
+                    if (editing == (s32)paypal_id) {
+                        ImGui::SameLine();
+                        ImGui::PushItemWidth(PAYPAL_NAME_INPUT_WIDTH);
+                        if(ImGui::InputText("##edit_paypal_id", saldo.paypal_ids[paypal_id], MAX_PAYPAL_NAME_LENGTH, ImGuiInputTextFlags_EnterReturnsTrue))
+                        {
+                            sprintf_s(text_buffer, "UPDATE OR FAIL conti SET nome='%s' WHERE rowid=%u;", saldo.paypal_ids[paypal_id], paypal_id+1);
+                            sqlite3_exec(global_db, text_buffer, 0, 0, &dberr);
+                            Assert(!dberr);
+                            editing = -1;
+                        }
+                    }
+                    else
+                    {
+                        ImGui::SameLine();
+                        ImGui::Text("%s: %.2f", saldo.paypal_ids[paypal_id], saldo.paypals[paypal_id]);
+                    }
+                }
+            }
+            {
+                ImGui::PushItemWidth(PAYPAL_NAME_INPUT_WIDTH);
+                ImGui::InputText("##new_paypal_id", saldo.paypal_ids[saldo.n_paypals], MAX_PAYPAL_NAME_LENGTH, ImGuiInputTextFlags_EnterReturnsTrue);
+                ImGui::SameLine();
+                if (ImGui::Button("+##add_paypal"))
+                {
+                    sprintf_s(text_buffer, "INSERT OR IGNORE INTO conti VALUES ('%s', 0);", saldo.paypal_ids[saldo.n_paypals++]);
+                    sqlite3_exec(global_db, text_buffer, 0, 0, &dberr);
+                }
+
+            }
 
             ImGui::Columns(1);
 
@@ -574,6 +614,8 @@ WinMain(
             {
                 b32 expand = 0;
                 Transactor *tsactor = &global_transactors[trans_index];
+                r32 promised_after_payments = Max(tsactor->total_promised - tsactor->total_value, 0.f);
+
                 if (trans_index & 0x1)
                     ImGui::PushStyleColor(ImGuiCol_Header, (u32)(0x22 << 24));
                 else
@@ -584,52 +626,55 @@ WinMain(
 
                 SYSTEMTIME st = {};
                 FileTimeToSystemTime((FILETIME *)&tsactor->last_date, &st);
-                sprintf_s(text_buffer, "%02d/%02d/%d %02d:%02d", st.wDay, st.wMonth, st.wYear, st.wHour, st.wMinute);
-                ImGui::Text(text_buffer);                                    ImGui::NextColumn();
+                ImGui::Text("%02d/%02d/%d %02d:%02d", st.wDay, st.wMonth, st.wYear, st.wHour, st.wMinute);   ImGui::NextColumn();
 
-                ImGui::Text("");                                             ImGui::NextColumn();
+                ImGui::Text("");                                                                             ImGui::NextColumn();
                 
-                sprintf_s(text_buffer, "% .2f", tsactor->total_value);
-                ImGui::Text(text_buffer);                                    ImGui::NextColumn();
+                if ((!selections[trans_index]) || (!promised_after_payments))
+                    sprintf_s(text_buffer, "% .2f", tsactor->total_value);
+                else
+                    text_buffer[0] = 0;
+                ImGui::Text(text_buffer);                                                                    ImGui::NextColumn();
 
-                sprintf_s(text_buffer, "% .2f", Max(tsactor->total_promised - tsactor->total_value, 0.f));
-                ImGui::Text(text_buffer);                                    ImGui::NextColumn();
+                ImGui::Text("% .2f", promised_after_payments);                                               ImGui::NextColumn();
                 
-                ImGui::Text("TODO");                                         ImGui::NextColumn();
+                ImGui::Text("TODO");                                                                         ImGui::NextColumn();
 
                 if (selections[trans_index])
                 {
                     Linked_Transaction *tsaction = tsactor->transactions;
                     while (tsaction)
                     {
-                        if (tsaction->value < 0.f)   ImGui::PushStyleColor(ImGuiCol_Header, 0x44050FDD);
-                        else                         ImGui::PushStyleColor(ImGuiCol_Header, 0x330FDD00);
-                        ImGui::Selectable("", true, ImGuiSelectableFlags_SpanAllColumns);
-                        ImGui::NextColumn();
-
-                        FileTimeToSystemTime((FILETIME *)&tsaction->date, &st);
-                        sprintf_s(text_buffer, "%02d/%02d/%d %02d:%02d", st.wDay, st.wMonth, st.wYear, st.wHour, st.wMinute);
-                        ImGui::Text(text_buffer);                                    ImGui::NextColumn();
-
-                        ImGui::Text(tsaction->comment);                              ImGui::NextColumn();
-
-                        sprintf_s(text_buffer, "% .2f", tsaction->value);
-                        if (tsaction->promised)
+                        if (!tsaction->promised)
                         {
+                            if (tsaction->value < 0.f)   ImGui::PushStyleColor(ImGuiCol_Header, 0x44050FDD);
+                            else                         ImGui::PushStyleColor(ImGuiCol_Header, 0x330FDD00);
+                            ImGui::Selectable("", true, ImGuiSelectableFlags_SpanAllColumns);
                             ImGui::NextColumn();
-                            ImGui::Text(text_buffer);                                ImGui::NextColumn();
+
+                            FileTimeToSystemTime((FILETIME *)&tsaction->date, &st);
+                            ImGui::Text("%02d/%02d/%d %02d:%02d", st.wDay, st.wMonth, st.wYear, st.wHour, st.wMinute);   ImGui::NextColumn();
+
+                            ImGui::Text(tsaction->details);                                                              ImGui::NextColumn();
+
+                            sprintf_s(text_buffer, "% .2f", tsaction->value);
+                            if (tsaction->promised)
+                            {
+                                ImGui::NextColumn();
+                                ImGui::Text(text_buffer);                                                                ImGui::NextColumn();
+                            }
+                            else
+                            {
+                                ImGui::Text(text_buffer);                                                                ImGui::NextColumn();
+                                ImGui::NextColumn();
+                            }
+
+
+                            ImGui::Text(saldo.paypal_ids[tsaction->wallet]);                                             ImGui::NextColumn();
+
+                            ImGui::PopStyleColor();
                         }
-                        else
-                        {
-                            ImGui::Text(text_buffer);                                ImGui::NextColumn();
-                            ImGui::NextColumn();
-                        }
-
-
-                        ImGui::Text(tsaction->wallet);                               ImGui::NextColumn();
-
                         tsaction = (Linked_Transaction *)tsaction->next;
-                        ImGui::PopStyleColor();
                     }
                 }
                 ImGui::Separator();
@@ -642,10 +687,15 @@ WinMain(
             local_persist char buf_comment[64] = {};
             local_persist char buf_value  [64] = {};
             local_persist char buf_promise[64] = {};
-            ImGui::InputTextMultiline("##cl", buf_client,  64, ImVec2(-FLT_MIN, ImGui::GetFrameHeight()), ImGuiInputTextFlags_CtrlEnterForNewLine);      ImGui::NextColumn();      ImGui::NextColumn();
-            ImGui::InputTextMultiline("##co", buf_comment, 64, ImVec2(-FLT_MIN, ImGui::GetFrameHeight()), ImGuiInputTextFlags_CtrlEnterForNewLine);      ImGui::NextColumn();
-            ImGui::InputTextMultiline("##va", buf_value,   64, ImVec2(-FLT_MIN, ImGui::GetFrameHeight()), ImGuiInputTextFlags_CtrlEnterForNewLine | ImGuiInputTextFlags_CharsDecimal);      ImGui::NextColumn();
-            ImGui::InputTextMultiline("##pr", buf_promise, 64, ImVec2(-FLT_MIN, ImGui::GetFrameHeight()), ImGuiInputTextFlags_CtrlEnterForNewLine | ImGuiInputTextFlags_CharsDecimal);      ImGui::NextColumn();
+            ImGui::PushItemWidth(-1.f);
+            ImGui::InputText("##cl", buf_client,  64, ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_CtrlEnterForNewLine);                                       ImGui::NextColumn();      ImGui::NextColumn();
+            ImGui::PushItemWidth(-1.f);
+            ImGui::InputText("##co", buf_comment, 64, ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_CtrlEnterForNewLine);                                       ImGui::NextColumn();
+            ImGui::PushItemWidth(-1.f);
+            ImGui::InputText("##va", buf_value,   64, ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_CtrlEnterForNewLine|ImGuiInputTextFlags_CharsDecimal);      ImGui::NextColumn();
+            ImGui::PushItemWidth(-1.f);
+            ImGui::InputText("##pr", buf_promise, 64, ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_CtrlEnterForNewLine|ImGuiInputTextFlags_CharsDecimal);      ImGui::NextColumn();
+            ImGui::PushItemWidth(-1.f);
             if (ImGui::BeginCombo("", saldo.paypal_ids[paypal_current]))
             {
                 for (int n = 0; n < 3; n++)

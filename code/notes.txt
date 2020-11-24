@@ -1,0 +1,2 @@
+Se una persona ha l'attività azzerata non per pagamento avvenuto, ma per aggiunta di una passività, apparirà con 0 entrate e 0 attività, senza dettagli.
+MAX_PAYPALS
