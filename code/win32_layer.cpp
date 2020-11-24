@@ -151,7 +151,6 @@ internal b32 win32_reload_file_if_changed(Input_File *file)
 struct Saldo
 {
     r32 effective;
-    r32 expected;
     r32 credit;
     
     r32 paypals[MAX_PAYPALS];
@@ -163,7 +162,7 @@ struct Linked_Transaction
 {
     u64 date;
     r32 value;
-    b32 promised;
+    u32 promised;
     char details[MAX_TRANSACTION_DETAIL_LENGTH];
     u32 wallet;
     void *next;
@@ -224,13 +223,12 @@ void credit_count(Saldo *saldo)
     char *err = 0;
     sqlite3_exec(global_db, "SELECT * FROM movimenti;", credit_count_step, (void *)saldo, &err);
     Assert(!err);
-    saldo->expected = saldo->effective + saldo->credit;
 }
 
 void credit_manual_add(Saldo *saldo, Linked_Transaction *tsaction)
 {
     if (tsaction->promised)
-        saldo->credit += tsaction->promised;
+        saldo->credit += tsaction->value;
     else
     {
         saldo->effective += tsaction->value;
@@ -266,7 +264,7 @@ int store_transaction(void *input, int n_cols, char **cols, char **col_names)
 
     sscanf_s(cols[COL_date],    "%llu", &(*tsaction)->date);
     sscanf_s(cols[COL_value],   "%f", &(*tsaction)->value);
-    sscanf_s(cols[COL_promise], "%d", &(*tsaction)->promised);
+    sscanf_s(cols[COL_promise], "%u", &(*tsaction)->promised);
     strcpy((*tsaction)->details, cols[COL_details]);
     sscanf_s(cols[COL_wallet], "%u", &(*tsaction)->wallet);
 
@@ -475,6 +473,7 @@ WinMain(
         ImGui::CreateContext();
         io = &ImGui::GetIO();
         io->Fonts->AddFontFromFileTTF("fonts/Redaction.otf", 24.f);
+//        io->Fonts->AddFontFromFileTTF("fonts/Arial Unicode MS.ttf", 24.f);
         ImGui_ImplWin32_Init(main_window);
         ImGui_ImplDX11_Init(d11.device, d11.context);
         ImGui::StyleColorsLight();
@@ -548,9 +547,9 @@ WinMain(
             ImGui::SetWindowPos(ImVec2(0, 0));
 
             ImGui::Columns(2, "saldo");
-            ImGui::Text("Saldo Effettivo:  %.2f", saldo.effective);
-            ImGui::Text("Saldo Previsto:  %.2f", saldo.expected);
-            ImGui::Text("Credito:  %.2f", saldo.credit);
+            ImGui::Text(u8"Saldo Effettivo:  EUR %.2f", saldo.effective);
+            ImGui::Text("Saldo Previsto:  EUR %.2f", saldo.effective + saldo.credit);
+            ImGui::Text("Credito:  EUR %.2f", saldo.credit);
 
             ImGui::NextColumn();
 
@@ -581,7 +580,7 @@ WinMain(
                     else
                     {
                         ImGui::SameLine();
-                        ImGui::Text("%s:  %.2f", saldo.paypal_ids[paypal_id], saldo.paypals[paypal_id]);
+                        ImGui::Text("%s:  EUR %.2f", saldo.paypal_ids[paypal_id], saldo.paypals[paypal_id]);
                     }
                 }
             }
@@ -612,7 +611,7 @@ WinMain(
             ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Cliente");  ImGui::NextColumn();
             ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Data");  ImGui::NextColumn();
             ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Dettagli");  ImGui::NextColumn();
-            ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Entrata/Usicta");  ImGui::NextColumn();
+            ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Entrata/Uscita");  ImGui::NextColumn();
             ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Attività/Passività");  ImGui::NextColumn();
             ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Tasca");  ImGui::NextColumn();
             ImGui::Separator();
@@ -622,7 +621,7 @@ WinMain(
             {
                 b32 expand = 0;
                 Transactor *tsactor = &global_transactors[trans_index];
-                r32 promised_after_payments = Max(tsactor->total_promised - tsactor->total_value, 0.f);
+                r32 promised_after_payments = tsactor->total_promised - tsactor->total_value;
 
                 if (trans_index & 0x1)
                     ImGui::PushStyleColor(ImGuiCol_Header, (u32)(0x22 << 24));
@@ -646,7 +645,7 @@ WinMain(
 
                 ImGui::Text("% .2f", promised_after_payments);                                               ImGui::NextColumn();
                 
-                ImGui::Text("TODO");                                                                         ImGui::NextColumn();
+                ImGui::NextColumn();
 
                 if (selections[trans_index])
                 {
