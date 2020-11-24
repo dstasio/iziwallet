@@ -366,7 +366,7 @@ WinMain(
 {
     // @todo add support for low-resolution performance counters
     // @todo maybe add support for 32-bit
-    i64 performance_counter_frequency = 0;
+    s64 performance_counter_frequency = 0;
     AssertKeep(QueryPerformanceFrequency((LARGE_INTEGER *)&performance_counter_frequency));
     // @todo make this hardware-dependant
     r32 target_ms_per_frame = 1.f/60.f;
@@ -379,7 +379,7 @@ WinMain(
     WindyClass.lpszClassName = "WindyClass";
     ATOM Result = RegisterClassA(&WindyClass);
 
-    RECT WindowDimensions = {0, 0, (i32)global_width, (i32)global_height};
+    RECT WindowDimensions = {0, 0, (s32)global_width, (s32)global_height};
     AdjustWindowRect(&WindowDimensions, WS_OVERLAPPEDWINDOW, FALSE);
     WindowDimensions.right -= WindowDimensions.left;
     WindowDimensions.bottom -= WindowDimensions.top;
@@ -457,9 +457,10 @@ WinMain(
 
         ImGui::CreateContext();
         io = &ImGui::GetIO();
+        io->Fonts->AddFontFromFileTTF("fonts/Redaction.otf", 24.f);
         ImGui_ImplWin32_Init(main_window);
         ImGui_ImplDX11_Init(d11.device, d11.context);
-//        ImGui::StyleColorsLight();
+        ImGui::StyleColorsLight();
 
 
         // ===========================================================================================
@@ -497,8 +498,8 @@ WinMain(
         MSG Message = {};
         u32 Count = 0;
 
-        i64 last_performance_counter = 0;
-        i64 current_performance_counter = 0;
+        s64 last_performance_counter = 0;
+        s64 current_performance_counter = 0;
         AssertKeep(QueryPerformanceCounter((LARGE_INTEGER *)&last_performance_counter));
         while(global_running && !global_error)
         {
@@ -564,7 +565,7 @@ WinMain(
             ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Data");  ImGui::NextColumn();
             ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Dettagli");  ImGui::NextColumn();
             ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Entrata/Usicta");  ImGui::NextColumn();
-            ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Attivita/Passivita");  ImGui::NextColumn();
+            ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Attività/Passività");  ImGui::NextColumn();
             ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Tasca");  ImGui::NextColumn();
             ImGui::Separator();
 
@@ -573,13 +574,17 @@ WinMain(
             {
                 b32 expand = 0;
                 Transactor *tsactor = &global_transactors[trans_index];
-                if (ImGui::Selectable(tsactor->name, false, ImGuiSelectableFlags_SpanAllColumns))
+                if (trans_index & 0x1)
+                    ImGui::PushStyleColor(ImGuiCol_Header, (u32)(0x22 << 24));
+                else
+                    ImGui::PushStyleColor(ImGuiCol_Header, (u32)(0x33 << 24));
+                if (ImGui::Selectable(tsactor->name, true, ImGuiSelectableFlags_SpanAllColumns))
                     selections[trans_index] = !selections[trans_index];
                 ImGui::NextColumn();
 
                 SYSTEMTIME st = {};
                 FileTimeToSystemTime((FILETIME *)&tsactor->last_date, &st);
-                sprintf_s(text_buffer, "%02d/%02d/%d %02d:%02d:%02d.%d", st.wDay, st.wMonth, st.wYear, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+                sprintf_s(text_buffer, "%02d/%02d/%d %02d:%02d", st.wDay, st.wMonth, st.wYear, st.wHour, st.wMinute);
                 ImGui::Text(text_buffer);                                    ImGui::NextColumn();
 
                 ImGui::Text("");                                             ImGui::NextColumn();
@@ -597,10 +602,13 @@ WinMain(
                     Linked_Transaction *tsaction = tsactor->transactions;
                     while (tsaction)
                     {
+                        if (tsaction->value < 0.f)   ImGui::PushStyleColor(ImGuiCol_Header, 0x44050FDD);
+                        else                         ImGui::PushStyleColor(ImGuiCol_Header, 0x330FDD00);
+                        ImGui::Selectable("", true, ImGuiSelectableFlags_SpanAllColumns);
                         ImGui::NextColumn();
 
                         FileTimeToSystemTime((FILETIME *)&tsaction->date, &st);
-                        sprintf_s(text_buffer, "%02d/%02d/%d %02d:%02d:%02d.%d", st.wDay, st.wMonth, st.wYear, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+                        sprintf_s(text_buffer, "%02d/%02d/%d %02d:%02d", st.wDay, st.wMonth, st.wYear, st.wHour, st.wMinute);
                         ImGui::Text(text_buffer);                                    ImGui::NextColumn();
 
                         ImGui::Text(tsaction->comment);                              ImGui::NextColumn();
@@ -621,9 +629,11 @@ WinMain(
                         ImGui::Text(tsaction->wallet);                               ImGui::NextColumn();
 
                         tsaction = (Linked_Transaction *)tsaction->next;
+                        ImGui::PopStyleColor();
                     }
                 }
                 ImGui::Separator();
+                ImGui::PopStyleColor();
             }
 
             static int paypal_current = 0;
@@ -632,10 +642,10 @@ WinMain(
             local_persist char buf_comment[64] = {};
             local_persist char buf_value  [64] = {};
             local_persist char buf_promise[64] = {};
-            ImGui::InputText("cl", buf_client,  64);      ImGui::NextColumn();      ImGui::NextColumn();
-            ImGui::InputText("co", buf_comment, 64);      ImGui::NextColumn();
-            ImGui::InputText("va", buf_value,   64, ImGuiInputTextFlags_CharsDecimal);      ImGui::NextColumn();
-            ImGui::InputText("pr", buf_promise, 64, ImGuiInputTextFlags_CharsDecimal);      ImGui::NextColumn();
+            ImGui::InputTextMultiline("##cl", buf_client,  64, ImVec2(-FLT_MIN, ImGui::GetFrameHeight()), ImGuiInputTextFlags_CtrlEnterForNewLine);      ImGui::NextColumn();      ImGui::NextColumn();
+            ImGui::InputTextMultiline("##co", buf_comment, 64, ImVec2(-FLT_MIN, ImGui::GetFrameHeight()), ImGuiInputTextFlags_CtrlEnterForNewLine);      ImGui::NextColumn();
+            ImGui::InputTextMultiline("##va", buf_value,   64, ImVec2(-FLT_MIN, ImGui::GetFrameHeight()), ImGuiInputTextFlags_CtrlEnterForNewLine | ImGuiInputTextFlags_CharsDecimal);      ImGui::NextColumn();
+            ImGui::InputTextMultiline("##pr", buf_promise, 64, ImVec2(-FLT_MIN, ImGui::GetFrameHeight()), ImGuiInputTextFlags_CtrlEnterForNewLine | ImGuiInputTextFlags_CharsDecimal);      ImGui::NextColumn();
             if (ImGui::BeginCombo("", saldo.paypal_ids[paypal_current]))
             {
                 for (int n = 0; n < 3; n++)
@@ -666,7 +676,7 @@ WinMain(
                 sqlite3_exec(global_db, text_buffer, 0, 0, &dberr);
                 Assert(!dberr);
 
-                i64 last_rowid = sqlite3_last_insert_rowid(global_db);
+                s64 last_rowid = sqlite3_last_insert_rowid(global_db);
                 if (last_rowid)
                 {
                     sprintf_s(text_buffer, "SELECT * FROM movimenti WHERE rowid = %lld;", last_rowid);
