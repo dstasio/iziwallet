@@ -480,6 +480,10 @@ WinMain(
         ImGui::StyleColorsLight();
         io->ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
+        ImGuiStyle &style = ImGui::GetStyle();
+        style.WindowRounding = 0.f;
+        style.FrameRounding = 5.f;
+
 
         // ===========================================================================================
         // Sqlite3 
@@ -544,9 +548,9 @@ WinMain(
             ImGui::SetWindowPos(ImVec2(0, 0));
 
             ImGui::Columns(2, "saldo");
-            ImGui::Text("Saldo Effettivo: %.2f", saldo.effective);
-            ImGui::Text("Saldo Previsto: %.2f", saldo.expected);
-            ImGui::Text("Credito: %.2f", saldo.credit);
+            ImGui::Text("Saldo Effettivo:  %.2f", saldo.effective);
+            ImGui::Text("Saldo Previsto:  %.2f", saldo.expected);
+            ImGui::Text("Credito:  %.2f", saldo.credit);
 
             ImGui::NextColumn();
 
@@ -577,20 +581,24 @@ WinMain(
                     else
                     {
                         ImGui::SameLine();
-                        ImGui::Text("%s: %.2f", saldo.paypal_ids[paypal_id], saldo.paypals[paypal_id]);
+                        ImGui::Text("%s:  %.2f", saldo.paypal_ids[paypal_id], saldo.paypals[paypal_id]);
                     }
                 }
             }
             {
-                ImGui::PushItemWidth(PAYPAL_NAME_INPUT_WIDTH);
-                ImGui::InputText("##new_paypal_id", saldo.paypal_ids[saldo.n_paypals], MAX_PAYPAL_NAME_LENGTH, ImGuiInputTextFlags_EnterReturnsTrue);
-                ImGui::SameLine();
                 if (ImGui::Button("+##add_paypal"))
+                {
+                    ImGui::SetKeyboardFocusHere();
+                }
+                ImGui::SameLine();
+                ImGui::PushItemWidth(PAYPAL_NAME_INPUT_WIDTH);
+                ImGui::PushStyleColor(ImGuiCol_FrameBg, 0);
+                if (ImGui::InputText("##new_paypal_id", saldo.paypal_ids[saldo.n_paypals], MAX_PAYPAL_NAME_LENGTH, ImGuiInputTextFlags_EnterReturnsTrue))
                 {
                     sprintf_s(text_buffer, "INSERT OR IGNORE INTO conti VALUES ('%s', 0);", saldo.paypal_ids[saldo.n_paypals++]);
                     sqlite3_exec(global_db, text_buffer, 0, 0, &dberr);
                 }
-
+                ImGui::PopStyleColor();
             }
 
             ImGui::Columns(1);
@@ -681,56 +689,84 @@ WinMain(
                 ImGui::PopStyleColor();
             }
 
-            static int paypal_current = 0;
+            local_persist u32 paypal_current = 0;
 
-            local_persist char buf_client [64] = {};
-            local_persist char buf_comment[64] = {};
-            local_persist char buf_value  [64] = {};
-            local_persist char buf_promise[64] = {};
-            ImGui::PushItemWidth(-1.f);
-            ImGui::InputText("##cl", buf_client,  64, ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_CtrlEnterForNewLine);                                       ImGui::NextColumn();      ImGui::NextColumn();
-            ImGui::PushItemWidth(-1.f);
-            ImGui::InputText("##co", buf_comment, 64, ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_CtrlEnterForNewLine);                                       ImGui::NextColumn();
-            ImGui::PushItemWidth(-1.f);
-            ImGui::InputText("##va", buf_value,   64, ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_CtrlEnterForNewLine|ImGuiInputTextFlags_CharsDecimal);      ImGui::NextColumn();
-            ImGui::PushItemWidth(-1.f);
-            ImGui::InputText("##pr", buf_promise, 64, ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_CtrlEnterForNewLine|ImGuiInputTextFlags_CharsDecimal);      ImGui::NextColumn();
-            ImGui::PushItemWidth(-1.f);
-            if (ImGui::BeginCombo("", saldo.paypal_ids[paypal_current]))
             {
-                for (int n = 0; n < 3; n++)
-                {
-                    const bool is_selected = (paypal_current == n);
-                    if (ImGui::Selectable(saldo.paypal_ids[n], is_selected))
-                        paypal_current = n;
+                local_persist char buf_client [64] = {};
+                local_persist char buf_comment[64] = {};
+                local_persist char buf_value  [64] = {};
+                local_persist char buf_promise[64] = {};
 
-                    // Set the initial focus when opening the combo (scrolling + keyboard navigation focus)
-                    if (is_selected)
-                        ImGui::SetItemDefaultFocus();
+                ImGui::PushItemWidth(-1.f);
+                if(ImGui::InputText("##cl", buf_client,  64, ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_CtrlEnterForNewLine))
+                    ImGui::SetKeyboardFocusHere();
+                ImGui::NextColumn();
+                ImGui::NextColumn();
+
+                ImGui::PushItemWidth(-1.f);
+                if(ImGui::InputText("##de", buf_comment, 64, ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_CtrlEnterForNewLine))
+                    ImGui::SetKeyboardFocusHere();
+                ImGui::NextColumn();
+
+                b32 do_insert = 0;
+                ImGui::PushItemWidth(-1.f);
+                if(ImGui::InputText("##va", buf_value,   64, ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_CtrlEnterForNewLine|ImGuiInputTextFlags_CharsDecimal))
+                {
+                    if (!buf_value[0])
+                        ImGui::SetKeyboardFocusHere();
+                    else
+                        do_insert = 1;
                 }
-                ImGui::EndCombo();
-            }
+                ImGui::NextColumn();
 
-            ImGui::NextColumn();
-            ImGui::Columns(1);
-            if (ImGui::Button("Inserisci"))
-            {
-                Assert((!buf_value[0]) != (!buf_promise[0]));
-                SYSTEMTIME system_time = {};
-                FILETIME epoch = {};
-                GetSystemTime(&system_time);
-                SystemTimeToFileTime(&system_time, &epoch);
+                ImGui::PushItemWidth(-1.f);
+                if(ImGui::InputText("##pr", buf_promise, 64, ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_CtrlEnterForNewLine|ImGuiInputTextFlags_CharsDecimal))
+                    do_insert = 1;
+                ImGui::NextColumn();
 
-                b32 is_promise = !!buf_promise[0];
-                sprintf_s(text_buffer, "INSERT OR IGNORE INTO movimenti VALUES ('%s', %llu, '%s', %s, %d, 'Paypal %1u');", buf_client, *((u64 *)&epoch), buf_comment, is_promise ? buf_promise : buf_value, is_promise, paypal_current);
-                sqlite3_exec(global_db, text_buffer, 0, 0, &dberr);
-                Assert(!dberr);
+                ImGui::PushItemWidth(-1.f);
 
-                s64 last_rowid = sqlite3_last_insert_rowid(global_db);
-                if (last_rowid)
+                if (ImGui::BeginCombo("", saldo.paypal_ids[paypal_current]))
                 {
-                    sprintf_s(text_buffer, "SELECT * FROM movimenti WHERE rowid = %lld;", last_rowid);
-                    sqlite3_exec(global_db, text_buffer, store_transaction, (void *)&saldo, &dberr);
+                    for (u32 n = 0; n < saldo.n_paypals; n++)
+                    {
+                        const bool is_selected = (paypal_current == n);
+                        if (ImGui::Selectable(saldo.paypal_ids[n], is_selected))
+                            paypal_current = n;
+
+                        // Set the initial focus when opening the combo (scrolling + keyboard navigation focus)
+                        if (is_selected)
+                            ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+
+                ImGui::NextColumn();
+                ImGui::Columns(1);
+                if (ImGui::Button("Inserisci") || do_insert)
+                {
+                    Assert((!buf_value[0]) != (!buf_promise[0]));
+                    SYSTEMTIME system_time = {};
+                    FILETIME epoch = {};
+                    GetSystemTime(&system_time);
+                    SystemTimeToFileTime(&system_time, &epoch);
+
+                    b32 is_promise = !!buf_promise[0];
+                    sprintf_s(text_buffer, "INSERT OR IGNORE INTO movimenti VALUES ('%s', %llu, '%s', %s, %d, 'Paypal %1u');", buf_client, *((u64 *)&epoch), buf_comment, is_promise ? buf_promise : buf_value, is_promise, paypal_current);
+                    sqlite3_exec(global_db, text_buffer, 0, 0, &dberr);
+                    Assert(!dberr);
+
+                    s64 last_rowid = sqlite3_last_insert_rowid(global_db);
+                    if (last_rowid)
+                    {
+                        sprintf_s(text_buffer, "SELECT * FROM movimenti WHERE rowid = %lld;", last_rowid);
+                        sqlite3_exec(global_db, text_buffer, store_transaction, (void *)&saldo, &dberr);
+                    }
+
+                    buf_client [0] = 0;
+                    buf_comment[0] = 0;
+                    buf_value  [0] = 0;
+                    buf_promise[0] = 0;
                 }
             }
 
