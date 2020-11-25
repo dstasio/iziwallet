@@ -58,6 +58,45 @@ global Platform_Renderer *global_renderer;
 global Memory_Pool global_memory = {};
 global ImGuiIO *io;
 
+internal void strip_string(char *s)
+{
+    char *at = s;
+    char *start = 0;
+    char *end   = 0;
+
+    while (*at)
+    {
+        if ((*at) != ' ' && (*at) != '\t')
+        {
+            if (!start)
+                start = at;
+            if (start)
+                end = at+1;
+        }
+        at++;
+    }
+
+    if (end && (*end))
+        *end = 0;
+    if (start)
+    {
+        char *dest = s;
+        char *src = start;
+        while(*src)
+        {
+            *(dest++) = *(src++);
+        }
+        *(dest) = *(src);
+    }
+
+    return;
+}
+
+inline r32 Sign(r32 x)
+{
+    return (x < 0) ? -1.f : 1.f;
+}
+
 inline r32
 Max(r32 a, r32 b)
 {
@@ -163,7 +202,7 @@ struct Linked_Transaction
 {
     u64 date;
     r32 value;
-    u32 promised;
+    r32 promised;
     char details[MAX_TRANSACTION_DETAIL_LENGTH];
     u32 wallet;
     void *next;
@@ -202,13 +241,15 @@ int credit_count_step(void *input, int n_cols, char **cols, char **col_names)
     Saldo *saldo = (Saldo *)input;
 
     r32 value = 0;
-    b32 promise = 0;
+    r32 promise = 0;
     sscanf_s(cols[COL_value],   "%f", &value);
-    sscanf_s(cols[COL_promise], "%d", &promise);
+    sscanf_s(cols[COL_promise], "%f", &promise);
 
     if (promise)
-        saldo->credit += value;
-    else
+    {
+        saldo->credit += promise;
+    }
+    if (value)
     {
         saldo->effective += value;
 
@@ -221,23 +262,29 @@ int credit_count_step(void *input, int n_cols, char **cols, char **col_names)
     return 0;
 }
 
-void credit_count(Saldo *saldo)
-{
-    char *err = 0;
-    sqlite3_exec(global_db, "SELECT * FROM movimenti;", credit_count_step, (void *)saldo, &err);
-    Assert(!err);
-}
-
 void credit_manual_add(Saldo *saldo, Linked_Transaction *tsaction)
 {
     if (tsaction->promised)
         saldo->credit += tsaction->value;
-    else
+    if (tsaction->value)
     {
         saldo->effective += tsaction->value;
 
         u32 p_index = 0;
         saldo->paypals[tsaction->wallet] += tsaction->value;
+    }
+}
+
+void credit_manual_sub(Saldo *saldo, Linked_Transaction *tsaction)
+{
+    if (tsaction->promised)
+        saldo->credit -= tsaction->value;
+    else
+    {
+        saldo->effective -= tsaction->value;
+
+        u32 p_index = 0;
+        saldo->paypals[tsaction->wallet] -= tsaction->value;
     }
 }
 
@@ -267,12 +314,28 @@ int store_transaction(void *input, int n_cols, char **cols, char **col_names)
 
     sscanf_s(cols[COL_date],    "%llu", &(*tsaction)->date);
     sscanf_s(cols[COL_value],   "%f", &(*tsaction)->value);
-    sscanf_s(cols[COL_promise], "%u", &(*tsaction)->promised);
+    sscanf_s(cols[COL_promise], "%f", &(*tsaction)->promised);
     strcpy((*tsaction)->details, cols[COL_details]);
     sscanf_s(cols[COL_wallet], "%u", &(*tsaction)->wallet);
 
-    if ((*tsaction)->promised)                      transactor->total_promised += (*tsaction)->value;
-    else                                            transactor->total_value += (*tsaction)->value;
+    if ((*tsaction)->promised)
+    {
+        if ((*tsaction)->value)
+        {
+            r32 sign_before = Sign(transactor->total_promised);
+            r32 sign_after  = Sign(transactor->total_promised + (*tsaction)->promised);
+
+            if (sign_before != sign_after)
+            {
+                transactor->total_promised = 0.f;
+            }
+            else
+                transactor->total_promised += (*tsaction)->promised;
+        }
+        else
+            transactor->total_promised += (*tsaction)->promised;
+    }
+    if ((*tsaction)->value)                         transactor->total_value += (*tsaction)->value;
     if ((*tsaction)->date > transactor->last_date)  transactor->last_date = (*tsaction)->date;
 
     if (input)
@@ -496,16 +559,16 @@ WinMain(
         sqlite3_exec(global_db, "CREATE TABLE IF NOT EXISTS conti(nome TEXT PRIMARY KEY, valore REAL NOT NULL);", 0, 0, &dberr);
 
         sqlite3_exec(global_db, "CREATE TABLE IF NOT EXISTS\
-                     movimenti(cliente TEXT, data INT, dettagli TEXT, valore REAL NOT NULL, promessa BOOL, tasca INT, PRIMARY KEY (cliente, data), FOREIGN KEY(tasca) REFERENCES saldo(rowid));",
+                     movimenti(cliente TEXT, data INT, dettagli TEXT, valore REAL, promessa REAL, tasca INT, PRIMARY KEY (cliente, data), FOREIGN KEY(tasca) REFERENCES saldo(rowid));",
                      0, 0, &dberr);
         Assert(!dberr);
 
         sqlite3_exec(global_db, "SELECT rowid,nome FROM conti ORDER BY rowid;", init_paypals, (void *)&saldo, &dberr);
         Assert(!dberr);
 
-        sqlite3_exec(global_db, "SELECT * FROM movimenti;", store_transaction, 0, &dberr);
+        sqlite3_exec(global_db, "SELECT * FROM movimenti;", store_transaction, (void *)&saldo, &dberr);
         Assert(!dberr);
-        credit_count(&saldo);
+//        credit_count(&saldo);
 
         MSG Message = {};
         u32 Count = 0;
@@ -596,6 +659,7 @@ WinMain(
                 ImGui::PushStyleColor(ImGuiCol_FrameBg, 0);
                 if (ImGui::InputText("##new_paypal_id", saldo.paypal_ids[saldo.n_paypals], MAX_PAYPAL_NAME_LENGTH, ImGuiInputTextFlags_EnterReturnsTrue))
                 {
+                    strip_string(saldo.paypal_ids[saldo.n_paypals]);
                     sprintf_s(text_buffer, "INSERT OR IGNORE INTO conti VALUES ('%s', 0);", saldo.paypal_ids[saldo.n_paypals++]);
                     sqlite3_exec(global_db, text_buffer, 0, 0, &dberr);
                 }
@@ -624,11 +688,13 @@ WinMain(
                         {
                             if (tsaction->to_be_deleted)
                             {
-                                sprintf_s(text_buffer, "DELETE FROM movimenti WHERE cliente='%s' AND data=%llu AND valore=%f AND promessa=%u;",
-                                          tsactor->name, tsaction->date, tsaction->value, tsaction->promised);
+                                sprintf_s(text_buffer, "DELETE FROM movimenti WHERE cliente='%s' AND data=%llu;",
+                                          tsactor->name, tsaction->date);
                                 sqlite3_exec(global_db, text_buffer, 0, 0, &dberr);
                                 Assert(!dberr);
 
+                                credit_manual_sub(&saldo, tsaction);
+                                
                                 *prev_tsaction = (Linked_Transaction *)tsaction->next;
                                 tsaction = (Linked_Transaction *)tsaction->next;
                             }
@@ -675,7 +741,6 @@ WinMain(
             {
                 b32 expand = 0;
                 Transactor *tsactor = &global_transactors[trans_index];
-                r32 promised_after_payments = tsactor->total_promised;
 
                 if (trans_index & 0x1)
                     ImGui::PushStyleColor(ImGuiCol_Header, (u32)(0x22 << 24));
@@ -690,7 +755,7 @@ WinMain(
                 ImGui::Text("%02d/%02d/%d %02d:%02d", st.wDay, st.wMonth, st.wYear, st.wHour, st.wMinute);       ImGui::NextColumn();
 
                 ImGui::Text("% .2f", tsactor->total_value);                                                      ImGui::NextColumn();
-                ImGui::Text("% .2f", promised_after_payments);                                                   ImGui::NextColumn();
+                ImGui::Text("% .2f", tsactor->total_promised);                                                   ImGui::NextColumn();
                 ImGui::Text("");                                                                                 ImGui::NextColumn();
 
                 
@@ -704,9 +769,8 @@ WinMain(
                     {
                         if (!tsaction->to_be_deleted)
                         {
-                            u32 bg_color = 0x44050FDD;
-                            if (tsaction->value > 0.f)
-                                bg_color = 0x330FDD00;
+#define BG_GREEN 0x330FDD00
+#define BG_RED   0x44050FDD
 
                             sprintf_s(text_buffer, "X##del_%llu", tsaction->date);
                             if (ImGui::Button(text_buffer))
@@ -720,27 +784,40 @@ WinMain(
                             FileTimeToSystemTime((FILETIME *)&tsaction->date, &st);
                             ImGui::Text("%02d/%02d/%d %02d:%02d", st.wDay, st.wMonth, st.wYear, st.wHour, st.wMinute);   ImGui::NextColumn();
 
-                            sprintf_s(text_buffer, "% .2f", tsaction->value);
+
+//                            ImGui::SetItemAllowOverlap();
 
                             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2());
+                            if (tsaction->value)
+                            {
+                                u32 bg_color = (tsaction->value > 0.f) ? BG_GREEN : BG_RED;
+
+                                ImVec2 tl = ImGui::GetCursorPos();
+                                ImVec2 br = tl;
+                                br.x += ImGui::GetContentRegionMax().x;
+                                br.y += ImGui::GetFrameHeight();
+                                draw_list->AddRectFilled(tl, br, bg_color);
+
+                                sprintf_s(text_buffer, "% .2f", tsaction->value);
+                                ImGui::Text(text_buffer);
+                            }
+                            ImGui::NextColumn();
+
+
                             if (tsaction->promised)
                             {
-                                ImGui::NextColumn();
+                                u32 bg_color = (tsaction->promised > 0.f) ? BG_GREEN : BG_RED;
+
+                                ImVec2 tl = ImGui::GetCursorPos();
+                                ImVec2 br = tl;
+                                br.x += ImGui::GetContentRegionMax().x;
+                                br.y += ImGui::GetFrameHeight();
+                                draw_list->AddRectFilled(tl, br, bg_color);
+
+                                sprintf_s(text_buffer, "% .2f", tsaction->promised);
+                                ImGui::Text(text_buffer);
                             }
-
-                            ImVec2 tl = ImGui::GetCursorPos();
-                            ImVec2 br = tl;
-                            br.x += ImGui::GetContentRegionMax().x;
-                            br.y += ImGui::GetFrameHeight();
-                            draw_list->AddRectFilled(tl, br, bg_color);
-                            ImGui::SetItemAllowOverlap();
-
-                            ImGui::Text(text_buffer);   ImGui::NextColumn();
-
-                            if (!tsaction->promised)
-                            {
-                                ImGui::NextColumn();
-                            }
+                            ImGui::NextColumn();
                             ImGui::PopStyleVar();
 
                             ImGui::Text(tsaction->details);                                                              ImGui::NextColumn();
@@ -766,21 +843,17 @@ WinMain(
                 if(ImGui::InputText("##cl", buf_client,  64, ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_CtrlEnterForNewLine))
                     ImGui::SetKeyboardFocusHere();
                 ImGui::NextColumn();
+                local_persist bool to_be_subtracted = true;
+                ImGui::Checkbox("Sottrai dall'attività", &to_be_subtracted);
                 ImGui::NextColumn();
 
-                b32 jump_to_details = 0;
                 ImGui::PushItemWidth(-1.f);
                 if(ImGui::InputText("##va", buf_value,   64, ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_CtrlEnterForNewLine|ImGuiInputTextFlags_CharsDecimal))
-                {
-                    if (!buf_value[0])
-                        ImGui::SetKeyboardFocusHere();
-                    else
-                        jump_to_details = 1;
-                }
+                    ImGui::SetKeyboardFocusHere();
                 ImGui::NextColumn();
 
                 ImGui::PushItemWidth(-1.f);
-                if(ImGui::InputText("##pr", buf_promise, 64, ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_CtrlEnterForNewLine|ImGuiInputTextFlags_CharsDecimal) || jump_to_details)
+                if(ImGui::InputText("##pr", buf_promise, 64, ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_CtrlEnterForNewLine|ImGuiInputTextFlags_CharsDecimal))
                     ImGui::SetKeyboardFocusHere();
                 ImGui::NextColumn();
 
@@ -811,14 +884,23 @@ WinMain(
                 ImGui::Columns(1);
                 if (ImGui::Button("Inserisci") || do_insert)
                 {
-                    Assert((!buf_value[0]) != (!buf_promise[0]));
                     SYSTEMTIME system_time = {};
                     FILETIME epoch = {};
                     GetSystemTime(&system_time);
                     SystemTimeToFileTime(&system_time, &epoch);
 
-                    b32 is_promise = !!buf_promise[0];
-                    sprintf_s(text_buffer, "INSERT OR IGNORE INTO movimenti VALUES ('%s', %llu, '%s', %s, %d, 'Paypal %1u');", buf_client, *((u64 *)&epoch), buf_comment, is_promise ? buf_promise : buf_value, is_promise, paypal_current);
+                    r32 value = 0.f;
+                    r32 promise = 0.f;
+                    if (buf_value[0])
+                        sscanf_s(buf_value, "%f", &value);
+                    if (to_be_subtracted && value)
+                        promise = -value;
+                    else if (buf_promise[0])
+                        sscanf_s(buf_promise, "%f", &promise);
+
+                    strip_string(buf_client);
+                    sprintf_s(text_buffer, "INSERT OR IGNORE INTO movimenti VALUES ('%s', %llu, '%s', %f, %f, %u);",
+                              buf_client, *((u64 *)&epoch), buf_comment, value, promise, paypal_current);
                     sqlite3_exec(global_db, text_buffer, 0, 0, &dberr);
                     Assert(!dberr);
 
