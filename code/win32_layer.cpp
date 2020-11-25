@@ -51,6 +51,7 @@
 global sqlite3 *global_db;
 global b32 global_running;
 global b32 global_error;
+global b32 global_deletion_pending;
 global u32 global_width = 1280;
 global u32 global_height = 720;
 global Platform_Renderer *global_renderer;
@@ -166,6 +167,8 @@ struct Linked_Transaction
     char details[MAX_TRANSACTION_DETAIL_LENGTH];
     u32 wallet;
     void *next;
+
+    b32 to_be_deleted;
 };
 
 struct Transactor
@@ -472,8 +475,7 @@ WinMain(
 
         ImGui::CreateContext();
         io = &ImGui::GetIO();
-        io->Fonts->AddFontFromFileTTF("fonts/Redaction.otf", 24.f);
-//        io->Fonts->AddFontFromFileTTF("fonts/Arial Unicode MS.ttf", 24.f);
+        io->Fonts->AddFontFromFileTTF("fonts/Redaction.otf", 22.f);
         ImGui_ImplWin32_Init(main_window);
         ImGui_ImplDX11_Init(d11.device, d11.context);
         ImGui::StyleColorsLight();
@@ -606,13 +608,65 @@ WinMain(
             ImGui::Text("");
             ImGui::Text("");
             ImGui::Text("Movimenti");
+
+            if (global_deletion_pending)
+            {
+                ImGui::SameLine();
+                if (ImGui::Button("Salva modifiche"))
+                {
+                    for (u32 trans_index = 0; trans_index < n_transactors; ++trans_index)
+                    {
+                        Transactor *tsactor = &global_transactors[trans_index];
+
+                        Linked_Transaction *tsaction = tsactor->transactions;
+                        Linked_Transaction **prev_tsaction = &tsactor->transactions;
+                        while (tsaction)
+                        {
+                            if (tsaction->to_be_deleted)
+                            {
+                                sprintf_s(text_buffer, "DELETE FROM movimenti WHERE cliente='%s' AND data=%llu AND valore=%f AND promessa=%u;",
+                                          tsactor->name, tsaction->date, tsaction->value, tsaction->promised);
+                                sqlite3_exec(global_db, text_buffer, 0, 0, &dberr);
+                                Assert(!dberr);
+
+                                *prev_tsaction = (Linked_Transaction *)tsaction->next;
+                                tsaction = (Linked_Transaction *)tsaction->next;
+                            }
+                            else
+                            {
+                                prev_tsaction = (Linked_Transaction **)&tsaction->next;
+                                tsaction = (Linked_Transaction *)tsaction->next;
+                            }
+                        }
+                    }
+                    global_deletion_pending = 0;
+                }
+
+                ImGui::SameLine();
+                if (ImGui::Button("Annulla modifiche"))
+                {
+                    for (u32 trans_index = 0; trans_index < n_transactors; ++trans_index)
+                    {
+                        Transactor *tsactor = &global_transactors[trans_index];
+
+                        Linked_Transaction *tsaction = tsactor->transactions;
+                        while (tsaction)
+                        {
+                            tsaction->to_be_deleted = 0;
+                            tsaction = (Linked_Transaction *)tsaction->next;
+                        }
+                    }
+                    global_deletion_pending = 0;
+                }
+            }
+
             ImGui::Columns(6, "movimenti");
             ImGui::Separator();
             ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Cliente");  ImGui::NextColumn();
             ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Data");  ImGui::NextColumn();
-            ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Dettagli");  ImGui::NextColumn();
             ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Entrata/Uscita");  ImGui::NextColumn();
             ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Attività/Passività");  ImGui::NextColumn();
+            ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Dettagli");  ImGui::NextColumn();
             ImGui::TextColored(ImVec4(0.2f, 0.5f, 0.7f, 1.f), "Tasca");  ImGui::NextColumn();
             ImGui::Separator();
 
@@ -621,7 +675,7 @@ WinMain(
             {
                 b32 expand = 0;
                 Transactor *tsactor = &global_transactors[trans_index];
-                r32 promised_after_payments = tsactor->total_promised - tsactor->total_value;
+                r32 promised_after_payments = tsactor->total_promised;
 
                 if (trans_index & 0x1)
                     ImGui::PushStyleColor(ImGuiCol_Header, (u32)(0x22 << 24));
@@ -633,53 +687,65 @@ WinMain(
 
                 SYSTEMTIME st = {};
                 FileTimeToSystemTime((FILETIME *)&tsactor->last_date, &st);
-                ImGui::Text("%02d/%02d/%d %02d:%02d", st.wDay, st.wMonth, st.wYear, st.wHour, st.wMinute);   ImGui::NextColumn();
+                ImGui::Text("%02d/%02d/%d %02d:%02d", st.wDay, st.wMonth, st.wYear, st.wHour, st.wMinute);       ImGui::NextColumn();
 
-                ImGui::Text("");                                                                             ImGui::NextColumn();
-                
-                if ((!selections[trans_index]) || (!promised_after_payments))
-                    sprintf_s(text_buffer, "% .2f", tsactor->total_value);
-                else
-                    text_buffer[0] = 0;
-                ImGui::Text(text_buffer);                                                                    ImGui::NextColumn();
+                ImGui::Text("% .2f", tsactor->total_value);                                                      ImGui::NextColumn();
+                ImGui::Text("% .2f", promised_after_payments);                                                   ImGui::NextColumn();
+                ImGui::Text("");                                                                                 ImGui::NextColumn();
 
-                ImGui::Text("% .2f", promised_after_payments);                                               ImGui::NextColumn();
                 
                 ImGui::NextColumn();
 
                 if (selections[trans_index])
                 {
+                    ImDrawList* draw_list = ImGui::GetWindowDrawList();
                     Linked_Transaction *tsaction = tsactor->transactions;
                     while (tsaction)
                     {
-                        if (!tsaction->promised)
+                        if (!tsaction->to_be_deleted)
                         {
-                            if (tsaction->value < 0.f)   ImGui::PushStyleColor(ImGuiCol_Header, 0x44050FDD);
-                            else                         ImGui::PushStyleColor(ImGuiCol_Header, 0x330FDD00);
-                            ImGui::Selectable("", true, ImGuiSelectableFlags_SpanAllColumns);
+                            u32 bg_color = 0x44050FDD;
+                            if (tsaction->value > 0.f)
+                                bg_color = 0x330FDD00;
+
+                            sprintf_s(text_buffer, "X##del_%llu", tsaction->date);
+                            if (ImGui::Button(text_buffer))
+                            {
+                                tsaction->to_be_deleted = 1;
+                                global_deletion_pending = 1;
+                            }
+                            ImGui::SameLine();
                             ImGui::NextColumn();
 
                             FileTimeToSystemTime((FILETIME *)&tsaction->date, &st);
                             ImGui::Text("%02d/%02d/%d %02d:%02d", st.wDay, st.wMonth, st.wYear, st.wHour, st.wMinute);   ImGui::NextColumn();
 
-                            ImGui::Text(tsaction->details);                                                              ImGui::NextColumn();
-
                             sprintf_s(text_buffer, "% .2f", tsaction->value);
+
+                            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2());
                             if (tsaction->promised)
                             {
                                 ImGui::NextColumn();
-                                ImGui::Text(text_buffer);                                                                ImGui::NextColumn();
                             }
-                            else
+
+                            ImVec2 tl = ImGui::GetCursorPos();
+                            ImVec2 br = tl;
+                            br.x += ImGui::GetContentRegionMax().x;
+                            br.y += ImGui::GetFrameHeight();
+                            draw_list->AddRectFilled(tl, br, bg_color);
+                            ImGui::SetItemAllowOverlap();
+
+                            ImGui::Text(text_buffer);   ImGui::NextColumn();
+
+                            if (!tsaction->promised)
                             {
-                                ImGui::Text(text_buffer);                                                                ImGui::NextColumn();
                                 ImGui::NextColumn();
                             }
+                            ImGui::PopStyleVar();
 
+                            ImGui::Text(tsaction->details);                                                              ImGui::NextColumn();
 
                             ImGui::Text(saldo.paypal_ids[tsaction->wallet]);                                             ImGui::NextColumn();
-
-                            ImGui::PopStyleColor();
                         }
                         tsaction = (Linked_Transaction *)tsaction->next;
                     }
@@ -702,24 +768,25 @@ WinMain(
                 ImGui::NextColumn();
                 ImGui::NextColumn();
 
-                ImGui::PushItemWidth(-1.f);
-                if(ImGui::InputText("##de", buf_comment, 64, ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_CtrlEnterForNewLine))
-                    ImGui::SetKeyboardFocusHere();
-                ImGui::NextColumn();
-
-                b32 do_insert = 0;
+                b32 jump_to_details = 0;
                 ImGui::PushItemWidth(-1.f);
                 if(ImGui::InputText("##va", buf_value,   64, ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_CtrlEnterForNewLine|ImGuiInputTextFlags_CharsDecimal))
                 {
                     if (!buf_value[0])
                         ImGui::SetKeyboardFocusHere();
                     else
-                        do_insert = 1;
+                        jump_to_details = 1;
                 }
                 ImGui::NextColumn();
 
                 ImGui::PushItemWidth(-1.f);
-                if(ImGui::InputText("##pr", buf_promise, 64, ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_CtrlEnterForNewLine|ImGuiInputTextFlags_CharsDecimal))
+                if(ImGui::InputText("##pr", buf_promise, 64, ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_CtrlEnterForNewLine|ImGuiInputTextFlags_CharsDecimal) || jump_to_details)
+                    ImGui::SetKeyboardFocusHere();
+                ImGui::NextColumn();
+
+                b32 do_insert = 0;
+                ImGui::PushItemWidth(-1.f);
+                if(ImGui::InputText("##de", buf_comment, 64, ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_CtrlEnterForNewLine))
                     do_insert = 1;
                 ImGui::NextColumn();
 
